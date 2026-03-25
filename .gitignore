@@ -58,3 +58,18 @@ backup/bkp-postgres-disparorapido.sql
 
 # PDFs de boas-vindas (teste local; não versionar os arquivos)
 data/welcome-pdfs/*.pdf
+
+# Arquivos locais e temporários
+_tmp_*
+*.tmp
+
+# Dados exportados localmente
+data/lead-exports/
+data/**/*.csv
+
+# Scripts e payloads de teste locais
+test-*.ps1
+test-*.bat
+debug-*.mjs
+test-webhook-*.json
+webhook-*.json
