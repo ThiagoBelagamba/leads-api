@@ -1,0 +1,17 @@
+{
+  "event": "PAYMENT_CREATED",
+  "payment": {
+    "id": "pay_test_local_001",
+    "subscription": "sub_test_extensao_mensal",
+    "externalReference": "extensao_mensal",
+    "status": "PENDING",
+    "value": 39.90,
+    "netValue": 38.50,
+    "dueDate": "2026-01-29",
+    "invoiceUrl": "https://sandbox.asaas.com/invoice/test_trial_mensal",
+    "description": "Extensão Chrome - Plano Mensal (Trial 7 dias)"
+  },
+  "subscription": {
+    "id": "sub_test_extensao_mensal"
+  }
+}

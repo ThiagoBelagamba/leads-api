@@ -1,0 +1,16 @@
+node_modules/
+dist/
+build/
+coverage/
+.vscode/
+.idea/
+.DS_Store
+*.log
+.env
+.env.*
+supabase/
+docker/
+specs/
+contract-first/
+uploads/
+tmp/

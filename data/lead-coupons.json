@@ -1,0 +1,14 @@
+[
+  {
+    "code": "DESC10",
+    "type": "FIXED",
+    "value": 10,
+    "active": true
+  },
+  {
+    "code": "DESC50",
+    "type": "FIXED",
+    "value": 50,
+    "active": true
+  }
+]

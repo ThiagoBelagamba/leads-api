@@ -1,0 +1,2 @@
+# Garantir LF em scripts shell (evita "No such file or directory" no Docker/Alpine)
+entrypoint.sh text eol=lf

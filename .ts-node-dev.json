@@ -1,0 +1,14 @@
+{
+  "poll": true,
+  "ignore": [
+    "node_modules/**/*",
+    "dist/**/*",
+    ".git/**/*",
+    "*.log",
+    "tmp/**/*",
+    "temp/**/*"
+  ],
+  "debounce": 1000,
+  "clear": false,
+  "respawn": false
+}

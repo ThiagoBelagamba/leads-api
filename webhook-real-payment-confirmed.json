@@ -1,0 +1,19 @@
+{
+  "event": "PAYMENT_CONFIRMED",
+  "payment": {
+    "id": "pay_xtgcn0ob3h2ce5ci",
+    "subscription": "sub_ygqiqg8t7h6a2kfl",
+    "externalReference": "extensao_anual",
+    "status": "CONFIRMED",
+    "value": 249,
+    "netValue": 241.07,
+    "dueDate": "2026-01-29",
+    "paymentDate": "2026-01-29",
+    "confirmedDate": "2026-01-29",
+    "invoiceUrl": "https://sandbox.asaas.com/i/xtgcn0ob3h2ce5ci",
+    "description": "Extensão Chrome - Plano Anual - Primeira cobrança após trial"
+  },
+  "subscription": {
+    "id": "sub_ygqiqg8t7h6a2kfl"
+  }
+}

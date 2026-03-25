@@ -1,0 +1,106 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build outputs (will be built inside container)
+build/
+*.tsbuildinfo
+
+# Development files
+.env
+.env.*
+.env.local
+.env.development
+.env.test
+*.local
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Documentation files
+doc/
+*.md
+!README.md
+DOCKER_CONSOLIDATION.md
+gemini.md
+qwen.md
+
+# Test files and directories
+__tests__/
+*.test.ts
+*.test.js
+*.spec.ts
+*.spec.js
+jest.config.js
+coverage/
+.nyc_output/
+
+# Git files
+.git/
+.gitignore
+.gitattributes
+
+# Logs
+logs/
+*.log
+
+# Runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+
+# nyc test coverage
+.nyc_output/
+
+# ESLint cache
+.eslintcache
+
+# Optional npm cache directory
+.npm
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# Docker files
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Temporary files
+tmp/
+temp/
+uploads/
+processed/
+
+# Python cache (if any)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# Scripts that are not needed in production
+scripts/test-*.ts
+scripts/python/

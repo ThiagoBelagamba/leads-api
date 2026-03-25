@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "src/**/*",
+    "tmp/sistema-acesso-endpoints/EndpointAccessDTO.ts",
+    "tmp/sistema-acesso-endpoints/EndpointAccess.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "build"
+  ]
+}
