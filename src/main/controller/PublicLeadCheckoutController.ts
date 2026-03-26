@@ -41,8 +41,8 @@ interface CouponConfig {
   active?: boolean;
 }
 
-const UNIT_PRICE = 0.5;
-const MIN_AMOUNT = 30;
+const UNIT_PRICE = 0.01;
+const MIN_AMOUNT = 0;
 
 const DEFAULT_CATALOG: Record<string, LeadCatalogItem[]> = {
   SP: [
@@ -146,6 +146,10 @@ export class PublicLeadCheckoutController {
         cpfCnpj,
         cep,
         addressNumber,
+        endereco,
+        bairro,
+        cidade,
+        uf,
         creditCard,
         couponCode,
       } = req.body as Record<string, any>;
@@ -195,6 +199,10 @@ export class PublicLeadCheckoutController {
         cpfCnpj,
         cep,
         addressNumber,
+        endereco,
+        bairro,
+        cidade,
+        uf,
       });
 
       const paymentPayload: any = {
@@ -237,6 +245,7 @@ export class PublicLeadCheckoutController {
           cpfCnpj: String(cpfCnpj).replace(/\D/g, ''),
           postalCode: String(cep).replace(/\D/g, ''),
           addressNumber: String(addressNumber),
+          addressComplement: [bairro, cidade].filter(Boolean).join(' - ').trim(),
           phone: String(buyerWhatsapp).replace(/\D/g, ''),
         };
         paymentPayload.remoteIp = req.ip;
@@ -438,7 +447,10 @@ export class PublicLeadCheckoutController {
     if (!Number.isInteger(qty) || qty <= 0) {
       return { valid: false, message: 'Quantidade de leads inválida.' };
     }
-    if (input.paymentMethod !== 'PIX' && input.paymentMethod !== 'CREDIT_CARD') {
+    if (
+      input.paymentMethod !== 'PIX' &&
+      input.paymentMethod !== 'CREDIT_CARD'
+    ) {
       return { valid: false, message: 'Forma de pagamento inválida.' };
     }
     return { valid: true };
@@ -550,10 +562,23 @@ export class PublicLeadCheckoutController {
     cpfCnpj?: string;
     cep?: string;
     addressNumber?: string;
+    endereco?: string;
+    bairro?: string;
+    cidade?: string;
+    uf?: string;
   }): Promise<{ id: string }> {
     const cleanDoc = (input.cpfCnpj || '').replace(/\D/g, '');
     const foundByEmail = await this.asaasService.findCustomerByEmail(input.buyerEmail);
-    if (foundByEmail) return { id: foundByEmail.id };
+    if (foundByEmail) {
+      await this.asaasService.updateCustomer(foundByEmail.id, {
+        postalCode: input.cep ? String(input.cep).replace(/\D/g, '') : undefined,
+        addressNumber: input.addressNumber || undefined,
+        address: input.endereco || undefined,
+        complement: [input.bairro, input.cidade].filter(Boolean).join(' - ').trim() || undefined,
+        province: input.uf ? String(input.uf).toUpperCase().slice(0, 2) : undefined,
+      } as any);
+      return { id: foundByEmail.id };
+    }
 
     const fallbackDoc = cleanDoc.length === 11 || cleanDoc.length === 14 ? cleanDoc : '00000000000';
     const cleanPhone = String(input.buyerWhatsapp).replace(/\D/g, '');
@@ -565,6 +590,9 @@ export class PublicLeadCheckoutController {
       phone: cleanPhone,
       postalCode: input.cep ? String(input.cep).replace(/\D/g, '') : undefined,
       addressNumber: input.addressNumber || undefined,
+      address: input.endereco || undefined,
+      complement: [input.bairro, input.cidade].filter(Boolean).join(' - ').trim() || undefined,
+      province: input.uf ? String(input.uf).toUpperCase().slice(0, 2) : undefined,
     } as any);
     return { id: customer.id };
   }
