@@ -42,10 +42,13 @@
         "type": "object",
         "properties": {
           "success": { "type": "boolean", "example": false },
-          "error": { "type": "string", "example": "Not Found" },
-          "message": { "type": "string", "example": "Rota ... not found" },
-          "details": { "type": "object" }
-        }
+          "code": { "type": "string", "example": "ROUTE_NOT_FOUND" },
+          "message": { "type": "string", "example": "Route GET /foo not found" },
+          "requestId": { "type": "string", "example": "c2be4f6c-11f4-4c4a-8c8b-2e7c6b9fdcd2" },
+          "timestamp": { "type": "string", "format": "date-time" },
+          "details": { "type": "object", "description": "Detalhes adicionais em ambiente de desenvolvimento." }
+        },
+        "required": ["success", "code", "message", "requestId", "timestamp"]
       },
       "SuccessResponse": {
         "type": "object",
@@ -277,7 +280,48 @@
           "400": {
             "description": "Parâmetros inválidos ou cupom inválido",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "examples": {
+                  "missingStateOrSegment": {
+                    "value": {
+                      "success": false,
+                      "code": "MISSING_STATE_OR_SEGMENT",
+                      "message": "state e segment são obrigatórios.",
+                      "requestId": "2d3e8b9e-5aac-48be-a289-9a7429f35f20",
+                      "timestamp": "2026-03-26T10:00:00.000Z"
+                    }
+                  },
+                  "invalidCoupon": {
+                    "value": {
+                      "success": false,
+                      "code": "INVALID_COUPON",
+                      "message": "Cupom inválido ou inativo.",
+                      "requestId": "45f8d1cd-8a77-4f0f-a5b2-2f8ad66fb646",
+                      "timestamp": "2026-03-26T10:01:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erro interno ao calcular quote",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "examples": {
+                  "quoteCalculationFailed": {
+                    "value": {
+                      "success": false,
+                      "code": "QUOTE_CALCULATION_FAILED",
+                      "message": "Erro ao calcular valor.",
+                      "requestId": "8ea771af-4b7b-4e54-a64d-d96e7c2e8f18",
+                      "timestamp": "2026-03-26T10:02:00.000Z"
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -307,7 +351,48 @@
           "400": {
             "description": "Validação falhou (estoque, dados, cupom, pagamento)",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "examples": {
+                  "invalidPayload": {
+                    "value": {
+                      "success": false,
+                      "code": "INVALID_CHECKOUT_PAYLOAD",
+                      "message": "Alguns dados do checkout são inválidos.",
+                      "requestId": "7cd21ece-31bd-4b7b-b983-8472eaf03590",
+                      "timestamp": "2026-03-26T10:03:00.000Z"
+                    }
+                  },
+                  "invalidCoupon": {
+                    "value": {
+                      "success": false,
+                      "code": "INVALID_COUPON",
+                      "message": "Cupom inválido ou inativo.",
+                      "requestId": "c87518fc-f42e-438f-bf00-aa3f247bfec6",
+                      "timestamp": "2026-03-26T10:04:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erro interno ao criar checkout",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "examples": {
+                  "checkoutCreationFailed": {
+                    "value": {
+                      "success": false,
+                      "code": "CHECKOUT_CREATION_FAILED",
+                      "message": "Erro ao criar checkout.",
+                      "requestId": "f4504327-5525-454f-8ec0-e6ea5709937d",
+                      "timestamp": "2026-03-26T10:05:00.000Z"
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -332,7 +417,39 @@
           "400": {
             "description": "paymentId inválido",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "examples": {
+                  "missingPaymentId": {
+                    "value": {
+                      "success": false,
+                      "code": "MISSING_PAYMENT_ID",
+                      "message": "paymentId é obrigatório.",
+                      "requestId": "1d8df031-a627-4f09-a20f-e8ef851ff399",
+                      "timestamp": "2026-03-26T10:06:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erro interno ao consultar pagamento",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "examples": {
+                  "paymentStatusCheckFailed": {
+                    "value": {
+                      "success": false,
+                      "code": "PAYMENT_STATUS_CHECK_FAILED",
+                      "message": "Erro ao consultar pagamento.",
+                      "requestId": "35a71f5f-fd96-4442-a2dd-e76bb62efe31",
+                      "timestamp": "2026-03-26T10:07:00.000Z"
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -410,7 +527,58 @@
           "400": {
             "description": "CSV inválido",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "examples": {
+                  "missingCsv": {
+                    "value": {
+                      "success": false,
+                      "code": "MISSING_CSV_CONTENT",
+                      "message": "csvContent é obrigatório.",
+                      "requestId": "39002055-eb2c-4efb-b673-f773117cb760",
+                      "timestamp": "2026-03-26T10:08:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Não autorizado",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "examples": {
+                  "unauthorizedAdmin": {
+                    "value": {
+                      "success": false,
+                      "code": "UNAUTHORIZED_ADMIN",
+                      "message": "Não autorizado.",
+                      "requestId": "62014a4d-d4df-4f4f-a754-cf54384588ab",
+                      "timestamp": "2026-03-26T10:09:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erro interno no upload",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "examples": {
+                  "csvInsertFailed": {
+                    "value": {
+                      "success": false,
+                      "code": "CSV_INSERT_FAILED",
+                      "message": "Erro ao inserir CSV: detalhe interno",
+                      "requestId": "22fc2f58-9cc8-4ffd-bdd8-1e95b60aaf88",
+                      "timestamp": "2026-03-26T10:10:00.000Z"
+                    }
+                  }
+                }
+              }
             }
           }
         }

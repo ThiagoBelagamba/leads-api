@@ -78,6 +78,30 @@ export class PublicLeadCheckoutController {
     this.supabase = this.createSupabaseClient();
   }
 
+  private getRequestId(res: Response): string {
+    const headerValue = res.getHeader('x-request-id');
+    if (typeof headerValue === 'string' && headerValue.trim()) return headerValue;
+    if (Array.isArray(headerValue) && headerValue.length > 0) return String(headerValue[0]);
+    return 'unknown';
+  }
+
+  private respondError(
+    res: Response,
+    statusCode: number,
+    code: string,
+    message: string,
+    details?: unknown
+  ): void {
+    res.status(statusCode).json({
+      success: false,
+      code,
+      message,
+      requestId: this.getRequestId(res),
+      timestamp: new Date().toISOString(),
+      ...(process.env.NODE_ENV === 'development' && details ? { details } : {}),
+    });
+  }
+
   async getCatalog(_req: Request, res: Response): Promise<void> {
     const catalog = await this.readCatalog();
     const states = Object.keys(catalog).map((state) => ({
@@ -99,7 +123,7 @@ export class PublicLeadCheckoutController {
       const segment = String(req.query.segment || '').trim();
       const couponCode = String(req.query.couponCode || '').trim();
       if (!state || !segment) {
-        res.status(400).json({ success: false, message: 'state e segment são obrigatórios.' });
+        this.respondError(res, 400, 'MISSING_STATE_OR_SEGMENT', 'state e segment são obrigatórios.');
         return;
       }
 
@@ -107,7 +131,7 @@ export class PublicLeadCheckoutController {
       const grossAmount = availableCount * UNIT_PRICE;
       const coupon = couponCode ? await this.findCoupon(couponCode) : null;
       if (couponCode && !coupon) {
-        res.status(400).json({ success: false, message: 'Cupom inválido ou inativo.' });
+        this.respondError(res, 400, 'INVALID_COUPON', 'Cupom inválido ou inativo.');
         return;
       }
       const discountAmount = this.calculateDiscount(grossAmount, coupon);
@@ -129,7 +153,7 @@ export class PublicLeadCheckoutController {
       });
     } catch (error) {
       this.logger.error('Erro ao calcular quote', error as Error);
-      res.status(500).json({ success: false, message: 'Erro ao calcular valor.' });
+      this.respondError(res, 500, 'QUOTE_CALCULATION_FAILED', 'Erro ao calcular valor.');
     }
   }
 
@@ -165,27 +189,29 @@ export class PublicLeadCheckoutController {
       });
 
       if (!validated.valid) {
-        res.status(400).json({ success: false, message: validated.message });
+        this.respondError(res, 400, 'INVALID_CHECKOUT_PAYLOAD', validated.message || 'Payload inválido.');
         return;
       }
 
       const available = await this.getAvailableLeadsCount(state, segment);
       if (available === null) {
-        res.status(400).json({ success: false, message: 'Estado/segmento inválido.' });
+        this.respondError(res, 400, 'INVALID_STATE_OR_SEGMENT', 'Estado/segmento inválido.');
         return;
       }
       if (Number(quantity) > available) {
-        res.status(400).json({
-          success: false,
-          message: `Quantidade indisponível. Máximo para ${segment}/${state}: ${available}.`,
-        });
+        this.respondError(
+          res,
+          400,
+          'INSUFFICIENT_LEADS_AVAILABILITY',
+          `Quantidade indisponível. Máximo para ${segment}/${state}: ${available}.`
+        );
         return;
       }
 
       const grossAmount = Number(quantity) * UNIT_PRICE;
       const coupon = couponCode ? await this.findCoupon(String(couponCode)) : null;
       if (couponCode && !coupon) {
-        res.status(400).json({ success: false, message: 'Cupom inválido ou inativo.' });
+        this.respondError(res, 400, 'INVALID_COUPON', 'Cupom inválido ou inativo.');
         return;
       }
       const discountAmount = this.calculateDiscount(grossAmount, coupon);
@@ -225,10 +251,12 @@ export class PublicLeadCheckoutController {
           !cep ||
           !addressNumber
         ) {
-          res.status(400).json({
-            success: false,
-            message: 'Para cartão, informe dados do cartão e endereço de cobrança.',
-          });
+          this.respondError(
+            res,
+            400,
+            'MISSING_CREDIT_CARD_DATA',
+            'Para cartão, informe dados do cartão e endereço de cobrança.'
+          );
           return;
         }
 
@@ -312,7 +340,7 @@ export class PublicLeadCheckoutController {
       });
     } catch (error) {
       this.logger.error('Erro ao criar checkout público de leads', error as Error);
-      res.status(500).json({ success: false, message: 'Erro ao criar checkout.' });
+      this.respondError(res, 500, 'CHECKOUT_CREATION_FAILED', 'Erro ao criar checkout.');
     }
   }
 
@@ -320,7 +348,7 @@ export class PublicLeadCheckoutController {
     try {
       const paymentId = String(req.query.paymentId || '');
       if (!paymentId) {
-        res.status(400).json({ success: false, message: 'paymentId é obrigatório.' });
+        this.respondError(res, 400, 'MISSING_PAYMENT_ID', 'paymentId é obrigatório.');
         return;
       }
       const payment = await this.asaasService.getPayment(paymentId);
@@ -331,7 +359,7 @@ export class PublicLeadCheckoutController {
       res.status(200).json({ success: true, paid, status: payment.status });
     } catch (error) {
       this.logger.error('Erro ao consultar status do pagamento público', error as Error);
-      res.status(500).json({ success: false, message: 'Erro ao consultar pagamento.' });
+      this.respondError(res, 500, 'PAYMENT_STATUS_CHECK_FAILED', 'Erro ao consultar pagamento.');
     }
   }
 
@@ -368,24 +396,24 @@ export class PublicLeadCheckoutController {
   async uploadStagingCsv(req: Request, res: Response): Promise<void> {
     try {
       if (!this.isAdminAuthorized(req)) {
-        res.status(401).json({ success: false, message: 'Não autorizado.' });
+        this.respondError(res, 401, 'UNAUTHORIZED_ADMIN', 'Não autorizado.');
         return;
       }
       if (!this.supabase) {
-        res.status(500).json({ success: false, message: 'Supabase não configurado na API.' });
+        this.respondError(res, 500, 'SUPABASE_NOT_CONFIGURED', 'Supabase não configurado na API.');
         return;
       }
 
       const csvContent = String(req.body?.csvContent || '');
       if (!csvContent.trim()) {
-        res.status(400).json({ success: false, message: 'csvContent é obrigatório.' });
+        this.respondError(res, 400, 'MISSING_CSV_CONTENT', 'csvContent é obrigatório.');
         return;
       }
 
       const delimiter = String(req.body?.delimiter || ',');
       const rows = this.parseCsvToObjects(csvContent, delimiter);
       if (rows.length === 0) {
-        res.status(400).json({ success: false, message: 'Nenhuma linha válida encontrada no CSV.' });
+        this.respondError(res, 400, 'CSV_EMPTY_OR_INVALID', 'Nenhuma linha válida encontrada no CSV.');
         return;
       }
 
@@ -400,7 +428,7 @@ export class PublicLeadCheckoutController {
             chunkSize: chunk.length,
             error: error.message,
           });
-          res.status(500).json({ success: false, message: `Erro ao inserir CSV: ${error.message}` });
+          this.respondError(res, 500, 'CSV_INSERT_FAILED', `Erro ao inserir CSV: ${error.message}`);
           return;
         }
         inserted += chunk.length;
@@ -414,7 +442,7 @@ export class PublicLeadCheckoutController {
       });
     } catch (error) {
       this.logger.error('Erro ao processar upload CSV para staging', error as Error);
-      res.status(500).json({ success: false, message: 'Erro ao processar upload CSV.' });
+      this.respondError(res, 500, 'CSV_UPLOAD_PROCESSING_FAILED', 'Erro ao processar upload CSV.');
     }
   }
 

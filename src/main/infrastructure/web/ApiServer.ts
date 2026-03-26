@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import type { Server } from 'http';
+import { randomUUID } from 'crypto';
 import dotenv from 'dotenv';
 import { Logger } from '../logging/Logger';
 import publicLeadRoutes from '@main/routes/PublicLeadCheckoutRoutes';
@@ -24,6 +25,11 @@ export class ApiServer {
     this.configureErrorHandling();
   }
 
+  private getRequestId(req: express.Request): string {
+    const requestId = (req as express.Request & { requestId?: string }).requestId;
+    return requestId || 'unknown';
+  }
+
   public async initForTest(): Promise<void> {
     await this.initialize();
   }
@@ -39,6 +45,15 @@ export class ApiServer {
 
     this.app.use(express.json({ limit: '50mb' }));
     this.app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+    this.app.use((req, res, next) => {
+      const incomingRequestId = req.header('x-request-id');
+      const requestId = incomingRequestId && incomingRequestId.trim().length > 0 ? incomingRequestId : randomUUID();
+
+      (req as express.Request & { requestId?: string }).requestId = requestId;
+      res.setHeader('x-request-id', requestId);
+      next();
+    });
   }
 
   private configureRoutes(): void {
@@ -58,8 +73,10 @@ export class ApiServer {
     // 404 handler
     this.app.use('*', (req, res) => {
       res.status(404).json({
-        error: 'Not Found',
+        success: false,
+        code: 'ROUTE_NOT_FOUND',
         message: `Route ${req.method} ${req.originalUrl} not found`,
+        requestId: this.getRequestId(req),
         timestamp: new Date().toISOString(),
       });
     });
@@ -79,6 +96,7 @@ export class ApiServer {
           statusCode,
           method: req.method,
           url: req.url,
+          requestId: this.getRequestId(req),
           ip: req.ip,
           userAgent: req.get('User-Agent'),
         });
@@ -87,14 +105,22 @@ export class ApiServer {
         this.logger.error('Request error', error, {
           method: req.method,
           url: req.url,
+          requestId: this.getRequestId(req),
           statusCode,
         });
       }
 
+      const code = error.code || (statusCode >= 500 ? 'INTERNAL_SERVER_ERROR' : 'REQUEST_ERROR');
       res.status(statusCode).json({
-        error: statusCode >= 500 ? 'Internal Server Error' : message,
+        success: false,
+        code,
+        message: statusCode >= 500 ? 'Internal Server Error' : message,
+        requestId: this.getRequestId(req),
         timestamp: new Date().toISOString(),
-        ...(process.env.NODE_ENV === 'development' && { stack: error.stack }),
+        ...(process.env.NODE_ENV === 'development' && {
+          details: error.details,
+          stack: error.stack,
+        }),
       });
     });
   }
