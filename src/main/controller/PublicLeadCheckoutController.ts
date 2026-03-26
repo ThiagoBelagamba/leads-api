@@ -43,6 +43,14 @@ interface CouponConfig {
 
 const UNIT_PRICE = 0.01;
 const MIN_AMOUNT = 0;
+const EXCLUDED_CSV_COLUMNS = new Set([
+  'id',
+  'place_id',
+  'created_at',
+  'updated_at',
+  'createdat',
+  'updatedat',
+]);
 
 const DEFAULT_CATALOG: Record<string, LeadCatalogItem[]> = {
   SP: [
@@ -492,6 +500,20 @@ export class PublicLeadCheckoutController {
     return item ? item.availableLeads : null;
   }
 
+  private parseSegments(rawSegment: string): string[] {
+    return String(rawSegment || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  private parseStates(rawState: string): string[] {
+    return String(rawState || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
   private createSupabaseClient(): SupabaseClient | null {
     const url = process.env.SUPABASE_URL?.trim();
     const key = (process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)?.trim();
@@ -502,26 +524,51 @@ export class PublicLeadCheckoutController {
   }
 
   private async getAvailableLeadsCount(state: string, segment: string): Promise<number> {
+    const requestedStates = this.parseStates(state);
+    const requestedSegments = this.parseSegments(segment);
+    if (requestedStates.length === 0 || requestedSegments.length === 0) return 0;
+
     // Preferência: contar na tabela do Supabase (real-time)
     if (this.supabase) {
-      const { count, error } = await this.supabase
-        .from('leadrapido')
-        .select('place_id', { count: 'exact', head: true })
-        .eq('estado', state)
-        .ilike('segmento', segment);
+      let total = 0;
+      let hadError = false;
 
-      if (!error && typeof count === 'number') return count;
-      this.logger.warn('Falha ao contar leads no Supabase, usando fallback', {
-        state,
-        segment,
-        error: error?.message,
-      });
+      for (const stateItem of requestedStates) {
+        for (const segmentItem of requestedSegments) {
+          const { count, error } = await this.supabase
+            .from('leadrapido')
+            .select('place_id', { count: 'exact', head: true })
+            .eq('estado', stateItem)
+            .ilike('segmento', segmentItem);
+
+          if (error) {
+            hadError = true;
+            this.logger.warn('Falha ao contar leads no Supabase, usando fallback', {
+              state: stateItem,
+              segment: segmentItem,
+              error: error.message,
+            });
+            break;
+          }
+
+          total += typeof count === 'number' ? count : 0;
+        }
+        if (hadError) break;
+      }
+
+      if (!hadError) return total;
     }
 
     // Fallback: catálogo local
-    const fallback = this.getAvailableLeads(state, segment);
-    if (fallback === null) return 0;
-    return fallback;
+    let fallbackTotal = 0;
+    for (const stateItem of requestedStates) {
+      for (const segmentItem of requestedSegments) {
+        const fallback = this.getAvailableLeads(stateItem, segmentItem);
+        if (fallback !== null) fallbackTotal += fallback;
+      }
+    }
+
+    return fallbackTotal;
   }
 
   private cachedCatalog: Record<string, LeadCatalogItem[]> | null = null;
@@ -689,29 +736,49 @@ export class PublicLeadCheckoutController {
   private async fetchRealLeadsRows(record: LeadPurchaseRecord): Promise<Array<Record<string, unknown>>> {
     if (!this.supabase) return [];
 
-    const { data, error } = await this.supabase
-      .from('leadrapido')
-      .select('*')
-      .eq('estado', record.state)
-      .ilike('segmento', record.segment)
-      .limit(record.quantity);
+    const requestedStates = this.parseStates(record.state);
+    const requestedSegments = this.parseSegments(record.segment);
+    if (requestedStates.length === 0 || requestedSegments.length === 0) return [];
 
-    if (error) {
-      this.logger.warn('Falha ao buscar leads reais para entrega, usando fallback', {
-        paymentId: record.asaasPaymentId,
-        state: record.state,
-        segment: record.segment,
-        error: error.message,
-      });
-      return [];
+    const rows: Array<Record<string, unknown>> = [];
+
+    for (const stateItem of requestedStates) {
+      for (const segmentItem of requestedSegments) {
+        const remaining = record.quantity - rows.length;
+        if (remaining <= 0) break;
+
+        const { data, error } = await this.supabase
+          .from('leadrapido')
+          .select('*')
+          .eq('estado', stateItem)
+          .ilike('segmento', segmentItem)
+          .limit(remaining);
+
+        if (error) {
+          this.logger.warn('Falha ao buscar leads reais para entrega, usando fallback', {
+            paymentId: record.asaasPaymentId,
+            state: stateItem,
+            segment: segmentItem,
+            error: error.message,
+          });
+          return [];
+        }
+
+        if (Array.isArray(data) && data.length > 0) {
+          rows.push(...(data as Array<Record<string, unknown>>));
+        }
+      }
+      if (rows.length >= record.quantity) break;
     }
 
-    return Array.isArray(data) ? (data as Array<Record<string, unknown>>) : [];
+    return rows;
   }
 
   private toCsv(rows: Array<Record<string, unknown>>): string {
     if (rows.length === 0) return '';
-    const headers = Object.keys(rows[0]);
+    const headers = Object.keys(rows[0]).filter(
+      (header) => !EXCLUDED_CSV_COLUMNS.has(String(header || '').toLowerCase())
+    );
     const lines = [headers.join(',')];
 
     for (const row of rows) {

@@ -73,3 +73,9 @@ test-*.bat
 debug-*.mjs
 test-webhook-*.json
 webhook-*.json
+
+# Stack de deploy local/producao (nao versionar)
+stack-prod.yml
+
+# SQL local para setup manual de banco (nao versionar)
+sql/supabase_schema_leadrapido.sql

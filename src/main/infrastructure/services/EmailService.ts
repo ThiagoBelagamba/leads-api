@@ -1354,37 +1354,131 @@ export class EmailService {
     try {
       const smtpConfig = getSmtpConfig();
       const formattedTotal = totalPaid.toFixed(2).replace('.', ',');
+      const leadRapidoLogoUrl = process.env.LEADRAPIDO_EMAIL_LOGO_URL?.trim() || 'https://leadrapido.com.br/images/logo-email.png';
+      const leadRapidoDownloadUrl = process.env.LEADRAPIDO_DOWNLOAD_URL?.trim() || 'https://leadrapido.com.br';
 
       const htmlContent = `
-        <!DOCTYPE html>
-        <html lang="pt-BR">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        </head>
-        <body style="font-family: Arial, sans-serif; background:#f8fafc; padding: 24px;">
-          <div style="max-width: 560px; margin: 0 auto; background: #ffffff; border-radius: 10px; padding: 24px;">
-            <h2 style="margin-top: 0;">Sua base de leads chegou!</h2>
-            <p>Olá, <strong>${nome}</strong>!</p>
-            <p>Pagamento confirmado com sucesso. Segue anexo o arquivo da sua compra:</p>
-            <ul>
-              <li>Estado: <strong>${state}</strong></li>
-              <li>Segmento: <strong>${segment}</strong></li>
-              <li>Total de leads: <strong>${quantity}</strong></li>
-              <li>Valor pago: <strong>R$ ${formattedTotal}</strong></li>
-            </ul>
-            <p>Obrigado pela compra.</p>
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sua Lista de Leads chegou! - Lead Rápido</title>
+  <style>
+    body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f4f7f9; margin: 0; padding: 0; -webkit-font-smoothing: antialiased; color: #333; }
+    .wrapper { width: 100%; table-layout: fixed; background-color: #f4f7f9; padding: 40px 0; }
+    .main { background-color: #ffffff; margin: 0 auto; width: 100%; max-width: 600px; border-spacing: 0; color: #4a4a4a; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 30px rgba(30, 58, 138, 0.1); }
+    .header { background-color: #ffffff; padding: 40px 20px 30px 20px; text-align: center; border-bottom: 1px solid #f0f4f8; }
+    .logo { max-width: 220px; height: auto; display: inline-block; }
+    .content { padding: 40px 40px 30px 40px; line-height: 1.6; }
+    .greeting { font-size: 22px; font-weight: 800; color: #1e3a8a; margin-bottom: 15px; }
+    .intro-text { font-size: 16px; color: #555; margin-bottom: 30px; }
+    .summary-title { font-size: 13px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+    .info-box { background-color: #f8fafc; border-radius: 12px; padding: 25px; margin-bottom: 35px; border: 1px solid #e2e8f0; }
+    .info-item { display: flex; justify-content: space-between; margin-bottom: 12px; border-bottom: 1px solid #edf2f7; padding-bottom: 10px; }
+    .info-item:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+    .label { font-weight: 600; color: #64748b; font-size: 14px; }
+    .value { font-weight: 700; color: #1e3a8a; font-size: 15px; text-align: right; }
+    .button-container { text-align: center; margin-bottom: 35px; }
+    .btn-download { background-color: #2563eb; color: #ffffff !important; padding: 18px 35px; text-decoration: none; font-weight: 800; font-size: 16px; border-radius: 12px; display: inline-block; box-shadow: 0 4px 15px rgba(37, 99, 235, 0.3); }
+    .attachment-note { text-align: center; font-size: 14px; color: #64748b; margin-bottom: 25px; padding: 15px; background-color: #eff6ff; border-radius: 8px; }
+    .partners-box { border-top: 1px solid #f1f5f9; padding-top: 30px; margin-top: 20px; }
+    .partner-link { display: block; font-size: 14px; color: #2563eb; text-decoration: none; font-weight: 600; margin-bottom: 5px; }
+    .footer { text-align: center; padding: 40px; font-size: 12px; color: #94a3b8; background-color: #f8fafc; }
+    .signature { font-weight: 700; color: #1e3a8a; margin-top: 5px; }
+    @media screen and (max-width: 600px) {
+      .main { border-radius: 0; }
+      .content { padding: 30px 20px; }
+      .info-item { flex-direction: column; text-align: left; }
+      .value { text-align: left; margin-top: 4px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <table class="main" align="center">
+      <tr>
+        <td class="header">
+          <img src="${leadRapidoLogoUrl}" alt="Lead Rápido" class="logo" />
+        </td>
+      </tr>
+      <tr>
+        <td class="content">
+          <div class="greeting">Suas oportunidades chegaram, ${nome}!</div>
+          <p class="intro-text">Tudo pronto! A sua lista de leads personalizados foi gerada com sucesso e já está disponível para impulsionar suas vendas.</p>
+
+          <div class="summary-title">Resumo da sua lista:</div>
+          <div class="info-box">
+            <div class="info-item">
+              <span class="label">Segmento:</span>
+              <span class="value">${segment}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">Localização:</span>
+              <span class="value">${state}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">Quantidade:</span>
+              <span class="value">${quantity} leads</span>
+            </div>
+            <div class="info-item">
+              <span class="label">Investimento:</span>
+              <span class="value">R$ ${formattedTotal}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">Dados inclusos:</span>
+              <span class="value">Tel, E-mail, Site e WhatsApp</span>
+            </div>
           </div>
-        </body>
-        </html>
+
+          <div class="button-container">
+            <a href="${leadRapidoDownloadUrl}" class="btn-download">BAIXAR PLANILHA DE LEADS</a>
+          </div>
+
+          <div class="attachment-note">
+            📎 Sua planilha já está anexada neste e-mail.<br/>
+            💡 <strong>Dica Comercial:</strong> Suba essa lista no seu CRM para organizar a abordagem e aumentar sua taxa de conversão.
+          </div>
+
+          <div class="partners-box">
+            <p style="font-size: 13px; color: #475569; margin-bottom: 10px;"><strong>Turbine seus resultados:</strong></p>
+            <a href="https://www.disparorapido.com.br" class="partner-link">🚀 Disparo Rápido: Envie mensagens automáticas para essa lista</a>
+            <a href="https://publix.ia.br" class="partner-link">🤖 Publix CRM: Organize seus leads com Inteligência Artificial</a>
+          </div>
+        </td>
+      </tr>
+      <tr>
+        <td class="footer">
+          <div class="signature">contato@leadrapido.com.br</div>
+          <p style="margin-top: 15px;">
+            <strong>M F SILVA TECNOLOGIA DA INFORMAÇÃO LTDA</strong><br/>
+            CNPJ: 35.185.351/0001-07<br/>
+            Franca - SP
+          </p>
+          <p style="margin-top: 20px;">&copy; ${new Date().getFullYear()} Lead Rápido. Todos os direitos reservados.</p>
+        </td>
+      </tr>
+    </table>
+  </div>
+</body>
+</html>
       `;
 
       await this.transporter.sendMail({
         from: `"${smtpConfig.fromName}" <${smtpConfig.from}>`,
         to,
-        subject: 'Sua compra de leads foi confirmada',
+        subject: 'Sua Lista de Leads chegou! - Lead Rápido',
         html: htmlContent,
-        text: `Olá ${nome},\n\nSua compra foi confirmada.\nEstado: ${state}\nSegmento: ${segment}\nLeads: ${quantity}\nValor pago: R$ ${formattedTotal}\n\nArquivo da base segue em anexo.`,
+        text:
+          `Suas oportunidades chegaram, ${nome}!\n\n` +
+          `Sua lista de leads foi gerada com sucesso.\n` +
+          `Segmento: ${segment}\n` +
+          `Localização: ${state}\n` +
+          `Quantidade: ${quantity} leads\n` +
+          `Investimento: R$ ${formattedTotal}\n\n` +
+          `A planilha está anexada neste email.\n` +
+          `Acesse também: ${leadRapidoDownloadUrl}\n\n` +
+          `contato@leadrapido.com.br`,
         attachments,
       });
     } catch (error) {
