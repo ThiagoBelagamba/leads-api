@@ -94,8 +94,8 @@ fi
 # Iniciar a aplicação baseada no SERVICE_TYPE
 if [ "$SERVICE_TYPE" = "worker" ]; then
     echo "🔧 Iniciando Worker..."
-    exec node dist/main/infrastructure/worker/WorkerServer.js
+    exec node dist/infrastructure/worker/WorkerServer.js
 else
     echo "🌐 Iniciando API Server..."
-    exec node dist/main/infrastructure/web/ApiServer.js
+    exec node dist/infrastructure/web/ApiServer.js
 fi

@@ -2,13 +2,13 @@
   "name": "leadrapidos-api",
   "version": "1.1.0",
   "description": "API de checkout e entrega de leads do projeto LeadRapidos",
-  "main": "dist/main/infrastructure/web/ApiServer.ts",
+  "main": "dist/infrastructure/web/ApiServer.js",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "build": "tsc && tsc-alias",
-    "start": "node dist/main/infrastructure/web/ApiServer.js",
+    "start": "node dist/infrastructure/web/ApiServer.js",
     "dev": "ts-node-dev --poll --ignore-watch node_modules --ignore-watch dist --ignore-watch .git -r tsconfig-paths/register src/main/infrastructure/web/ApiServer.ts",
     "tunnel": "ngrok http 3000"
   },
@@ -23,6 +23,7 @@
     "express": "^4.19.2",
     "inversify": "^7.10.4",
     "nodemailer": "^7.0.13",
+    "reflect-metadata": "^0.2.2",
     "uuid": "^11.1.0"
   },
   "devDependencies": {
