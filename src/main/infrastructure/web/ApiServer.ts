@@ -70,6 +70,12 @@ export class ApiServer {
     this.app.get('/api/v1/health', healthResponse);
     this.app.use('/api/v1/public-leads', publicLeadRoutes);
 
+    // Alias para webhook do Asaas (caminho curto configurado no painel)
+    this.app.post('/api/v1/webhooks/asaas', (req, res, next) => {
+      req.url = '/webhooks/asaas';
+      publicLeadRoutes(req, res, next);
+    });
+
     // 404 handler
     this.app.use('*', (req, res) => {
       res.status(404).json({

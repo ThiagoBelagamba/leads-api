@@ -37,6 +37,8 @@ export interface AsaasCreateCustomerPayload {
   addressNumber?: string;
   complement?: string;
   province?: string;
+  /** Código IBGE da cidade (ex: 4205407). */
+  city?: number;
   externalReference?: string;
 }
 
@@ -677,6 +679,25 @@ export class AsaasService {
   }
 
   /**
+   * Fiscal Info - Serviços municipais cadastrados (para NFS-e).
+   * GET /v3/fiscalInfo/services
+   */
+  async listMunicipalServices(filters?: {
+    offset?: number;
+    limit?: number;
+    description?: string;
+  }): Promise<{
+    data: Array<{ id: string; description: string; issTax?: number }>;
+    hasMore: boolean;
+    totalCount: number;
+    offset: number;
+    limit: number;
+  }> {
+    const response = await this.client.get('/fiscalInfo/services', { params: filters });
+    return response.data;
+  }
+
+  /**
    * Notas Fiscais (NFS-e) - Agendar emissão atrelada a uma cobrança confirmada.
    * POST /v3/invoices
    * @see https://docs.asaas.com/docs/notas-fiscais
@@ -737,6 +758,26 @@ export class AsaasService {
         ...(payload.taxes.pisCofinsTaxStatus && { pisCofinsTaxStatus: payload.taxes.pisCofinsTaxStatus }),
       };
     }
+    // Log de debug (sem dados sensíveis) para validar emissão
+    console.log('[Asaas] Scheduling invoice with:', {
+      payment: payload.payment,
+      value: payload.value,
+      hasMunicipalServiceId: Boolean(payload.municipalServiceId),
+      municipalServiceId: payload.municipalServiceId || null,
+      municipalServiceCode: payload.municipalServiceCode || null,
+      hasTaxes: Boolean(payload.taxes),
+      taxes: payload.taxes
+        ? {
+            retainIss: payload.taxes.retainIss,
+            iss: payload.taxes.iss,
+            pis: payload.taxes.pis,
+            cofins: payload.taxes.cofins,
+            csll: payload.taxes.csll,
+            inss: payload.taxes.inss,
+            ir: payload.taxes.ir,
+          }
+        : null,
+    });
     const response = await this.client.post<{ id: string; status: string }>('/invoices', body);
     return response.data;
   }

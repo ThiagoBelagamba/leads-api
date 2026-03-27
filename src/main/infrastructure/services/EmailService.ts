@@ -265,8 +265,8 @@ export class EmailService {
       const smtpConfig = getSmtpConfig();
       const logoUrl = getEmailLogoUrl();
       const headerContent = logoUrl
-        ? `<img src="${logoUrl}" alt="Disparo Rápido" style="max-height: 48px; width: auto; display: block; margin: 0 auto; border: 0;" />`
-        : '<h1 style="color: #0056b3; margin: 0; font-size: 24px; letter-spacing: 1px;">🚀 Disparo Rápido</h1>';
+        ? `<img src="${logoUrl}" alt="Lead Rápido" style="max-height: 48px; width: auto; display: block; margin: 0 auto; border: 0;" />`
+        : '<h1 style="color: #0056b3; margin: 0; font-size: 24px; letter-spacing: 1px;">🚀 Lead Rápido</h1>';
 
       const htmlContent = `
 <!DOCTYPE html>
@@ -274,7 +274,7 @@ export class EmailService {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sua conta na Disparo Rápido está ativa!</title>
+    <title>Sua conta na Lead Rápido está ativa!</title>
     <style>
         body { margin: 0; padding: 0; background-color: #f4f7f6; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif, Arial; color: #333333; line-height: 1.6; }
         table { border-spacing: 0; width: 100%; }
@@ -314,7 +314,7 @@ export class EmailService {
             <tr>
                 <td class="content">
                     <h2>Olá, ${empresaNome}, tudo bem?</h2>
-                    <p>Seu pagamento foi confirmado e sua conta na <strong>Disparo Rápido</strong> já está ativa! 🎉</p>
+                    <p>Seu pagamento foi confirmado e sua conta na <strong>Lead Rápido</strong> já está ativa! 🎉</p>
                     <p>Em anexo a este e-mail, enviamos todos os materiais exclusivos para você extrair o máximo da nossa ferramenta e turbinar suas vendas:</p>
                     <ul class="attachment-list">
                         <li>🛡️ Manual Antibanimento</li>
@@ -330,15 +330,15 @@ export class EmailService {
                     <p><strong>Próximo passo:</strong><br>Após instalar a extensão, faça login utilizando o <strong>mesmo e-mail e a senha</strong> cadastrados no momento da compra.</p>
                     <div class="support-box">
                         <p><strong>Precisa de ajuda?</strong><br>Nosso suporte está à disposição para ajudar você:</p>
-                        <p style="margin-top: 10px;">✉️ E-mail: <a href="mailto:contato@disparorapido.com.br" class="support-link">contato@disparorapido.com.br</a></p>
+                        <p style="margin-top: 10px;">✉️ E-mail: <a href="mailto:contato@leadrapido.com.br" class="support-link">contato@leadrapido.com.br</a></p>
                         <p style="margin-top: 5px;">📱 WhatsApp: <a href="https://wa.me/5516992933505" class="whatsapp-link" target="_blank">(16) 99293-3505</a></p>
                     </div>
                 </td>
             </tr>
             <tr>
                 <td class="footer">
-                    <p style="margin: 0; margin-bottom: 15px;">Atenciosamente,<br><strong>Equipe Disparo Rápido</strong></p>
-                    <p style="margin: 0; font-size: 12px; color: #aaaaaa;">&copy; ${new Date().getFullYear()} Disparo Rápido. Todos os direitos reservados.</p>
+                    <p style="margin: 0; margin-bottom: 15px;">Atenciosamente,<br><strong>Equipe Lead Rápido</strong></p>
+                    <p style="margin: 0; font-size: 12px; color: #aaaaaa;">&copy; ${new Date().getFullYear()} Lead Rápido. Todos os direitos reservados.</p>
                 </td>
             </tr>
         </table>
@@ -351,9 +351,9 @@ export class EmailService {
       const info = await this.transporter.sendMail({
         from: `"${smtpConfig.fromName}" <${smtpConfig.from}>`,
         to,
-        subject: 'Sua conta na Disparo Rápido está ativa!',
+        subject: 'Sua conta na Lead Rápido está ativa!',
         html: htmlContent,
-        text: `Olá, ${empresaNome}, tudo bem?\n\nSeu pagamento foi confirmado e sua conta na Disparo Rápido já está ativa!\n\nEm anexo enviamos os materiais exclusivos. Instale a extensão: ${CHROME_WEB_STORE_URL}\n\nPróximo passo: faça login com o mesmo e-mail e senha cadastrados na compra.\n\nSuporte: contato@disparorapido.com.br | WhatsApp (16) 99293-3505\n\nEquipe Disparo Rápido`,
+        text: `Olá, ${empresaNome}, tudo bem?\n\nSeu pagamento foi confirmado e sua conta na Lead Rápido já está ativa!\n\nEm anexo enviamos os materiais exclusivos. Instale a extensão: ${CHROME_WEB_STORE_URL}\n\nPróximo passo: faça login com o mesmo e-mail e senha cadastrados na compra.\n\nSuporte: contato@leadrapido.com.br | WhatsApp (16) 99293-3505\n\nEquipe Lead Rápido`,
         ...(attachments.length > 0 && { attachments }),
       });
 
@@ -401,31 +401,33 @@ export class EmailService {
 
     try {
       const smtpConfig = getSmtpConfig();
-      const logoUrl = getEmailLogoUrl();
-
-      const headerContent = logoUrl
-        ? `<img src="${logoUrl}" alt="Disparo Rápido" style="max-height: 48px; width: auto; display: block; margin: 0 auto; border: 0;" />`
-        : '<h1 style="color: #0056b3; margin: 0; font-size: 24px; letter-spacing: 1px;">🚀 Disparo Rápido</h1>';
-
       const friendlyName = empresaNome || nome || 'Cliente';
       const formattedValue =
         typeof value === 'number' && !Number.isNaN(value) ? value.toFixed(2).replace('.', ',') : undefined;
-
+      const leadRapidoLogoUrl = process.env.LEADRAPIDO_EMAIL_LOGO_URL?.trim() || 'https://leadrapido.com.br/images/logo-email.png';
+      const primaryInvoiceUrl = pdfUrl || xmlUrl || 'https://leadrapido.com.br';
+      const friendlyService = 'Publicidade e Propaganda';
+      const invoiceAttachments: Array<{ filename: string; content?: Buffer; path?: string }> = [...attachments];
+      if (pdfUrl && !invoiceAttachments.some((a) => a.filename.toLowerCase().endsWith('.pdf'))) {
+        invoiceAttachments.push({
+          filename: `nota-fiscal-${invoiceNumber || 'lead-rapido'}.pdf`,
+          path: pdfUrl,
+        });
+      }
+      if (xmlUrl && !invoiceAttachments.some((a) => a.filename.toLowerCase().endsWith('.xml'))) {
+        invoiceAttachments.push({
+          filename: `nota-fiscal-${invoiceNumber || 'lead-rapido'}.xml`,
+          path: xmlUrl,
+        });
+      }
       const linksHtml =
         pdfUrl || xmlUrl
-          ? `<ul style="list-style-type: none; padding-left: 0; margin: 12px 0 0;">
-              ${
-                pdfUrl
-                  ? `<li style="margin-bottom: 6px;">📄 <a href="${pdfUrl}" style="color: #0056b3; text-decoration: none;">Baixar NF em PDF</a></li>`
-                  : ''
-              }
-              ${
-                xmlUrl
-                  ? `<li style="margin-bottom: 6px;">🧾 <a href="${xmlUrl}" style="color: #0056b3; text-decoration: none;">Baixar NF em XML</a></li>`
-                  : ''
-              }
-            </ul>`
-          : '';
+          ? `<div class="attachment-note">
+               📎 <strong>Links da Nota Fiscal:</strong><br/>
+               ${pdfUrl ? `• <a href="${pdfUrl}" style="color:#2563eb;text-decoration:none;">Baixar PDF</a><br/>` : ''}
+               ${xmlUrl ? `• <a href="${xmlUrl}" style="color:#2563eb;text-decoration:none;">Baixar XML</a>` : ''}
+             </div>`
+          : `<div class="attachment-note">📎 Sua Nota Fiscal está disponível no botão abaixo.</div>`;
 
       const htmlContent = `
 <!DOCTYPE html>
@@ -433,144 +435,32 @@ export class EmailService {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Nota Fiscal - Disparo Rápido</title>
+  <title>Sua Nota Fiscal chegou! - Lead Rápido</title>
   <style>
-    body {
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      background-color: #f4f7f9;
-      margin: 0;
-      padding: 0;
-      -webkit-font-smoothing: antialiased;
-      color: #333;
-    }
-    .wrapper {
-      width: 100%;
-      table-layout: fixed;
-      background-color: #f4f7f9;
-      padding-bottom: 40px;
-      padding-top: 40px;
-    }
-    .main {
-      background-color: #ffffff;
-      margin: 0 auto;
-      width: 100%;
-      max-width: 600px;
-      border-spacing: 0;
-      font-family: sans-serif;
-      color: #4a4a4a;
-      border-radius: 12px;
-      overflow: hidden;
-      box-shadow: 0 10px 25px rgba(0,0,0,0.05);
-      margin-top: 0;
-    }
-    .header {
-      background-color: #ffffff;
-      padding: 40px 20px 20px 20px;
-      text-align: center;
-      border-bottom: 1px solid #e2e8f0;
-    }
-    .logo {
-      max-width: 280px;
-      height: auto;
-      display: inline-block;
-    }
-    .content {
-      padding: 30px 35px 40px 35px;
-      line-height: 1.6;
-    }
-    .greeting {
-      font-size: 20px;
-      font-weight: 700;
-      color: #1a1a1a;
-      margin-bottom: 15px;
-    }
-    .intro-text {
-      font-size: 16px;
-      color: #555;
-      margin-bottom: 30px;
-    }
-    .summary-title {
-      font-size: 14px;
-      font-weight: 700;
-      color: #888;
-      text-transform: uppercase;
-      margin-bottom: 10px;
-    }
-    .info-box {
-      background-color: #f8fafc;
-      border-radius: 10px;
-      padding: 25px;
-      margin: 10px 0 30px 0;
-      border: 1px solid #e2e8f0;
-    }
-    .info-item {
-      display: flex;
-      justify-content: space-between;
-      margin-bottom: 12px;
-      border-bottom: 1px solid #edf2f7;
-      padding-bottom: 8px;
-    }
-    .info-item:last-child {
-      border-bottom: none;
-      margin-bottom: 0;
-      padding-bottom: 0;
-    }
-    .label {
-      font-weight: 600;
-      color: #718096;
-      font-size: 14px;
-    }
-    .value {
-      font-weight: 700;
-      color: #0056b3;
-      font-size: 15px;
-    }
-    .attachment-note {
-      text-align: center;
-      padding: 20px;
-      background-color: #f1f5f9;
-      border-radius: 8px;
-      color: #475569;
-      font-size: 14px;
-      margin-bottom: 25px;
-    }
-    .tip-box {
-      text-align: center;
-      font-size: 14px;
-      color: #718096;
-      background-color: #f0fff4;
-      border: 1px dashed #68d391;
-      padding: 15px;
-      border-radius: 8px;
-      margin-top: 20px;
-    }
-    .footer {
-      text-align: center;
-      padding: 30px;
-      font-size: 13px;
-      color: #a0aec0;
-      background-color: #f7fafc;
-    }
-    .signature {
-      font-weight: 700;
-      color: #0056b3;
-      margin-top: 5px;
-    }
+    body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f4f7f9; margin: 0; padding: 0; -webkit-font-smoothing: antialiased; color: #333; }
+    .wrapper { width: 100%; table-layout: fixed; background-color: #f4f7f9; padding: 40px 0; }
+    .main { background-color: #ffffff; margin: 0 auto; width: 100%; max-width: 600px; border-spacing: 0; color: #4a4a4a; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 30px rgba(30, 58, 138, 0.1); }
+    .header { background-color: #ffffff; padding: 40px 20px 30px 20px; text-align: center; border-bottom: 1px solid #f0f4f8; }
+    .logo { max-width: 220px; height: auto; display: inline-block; }
+    .content { padding: 40px 40px 30px 40px; line-height: 1.6; }
+    .greeting { font-size: 22px; font-weight: 800; color: #1e3a8a; margin-bottom: 15px; }
+    .intro-text { font-size: 16px; color: #555; margin-bottom: 30px; }
+    .summary-title { font-size: 13px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+    .info-box { background-color: #f8fafc; border-radius: 12px; padding: 25px; margin-bottom: 35px; border: 1px solid #e2e8f0; }
+    .info-item { display: flex; justify-content: space-between; margin-bottom: 12px; border-bottom: 1px solid #edf2f7; padding-bottom: 10px; }
+    .info-item:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+    .label { font-weight: 600; color: #64748b; font-size: 14px; }
+    .value { font-weight: 700; color: #1e3a8a; font-size: 15px; text-align: right; }
+    .button-container { text-align: center; margin-bottom: 35px; }
+    .btn-download { background-color: #2563eb; color: #ffffff !important; padding: 18px 35px; text-decoration: none; font-weight: 800; font-size: 16px; border-radius: 12px; display: inline-block; box-shadow: 0 4px 15px rgba(37, 99, 235, 0.3); }
+    .attachment-note { text-align: center; font-size: 14px; color: #64748b; margin-bottom: 25px; padding: 15px; background-color: #eff6ff; border-radius: 8px; }
+    .footer { text-align: center; padding: 40px; font-size: 12px; color: #94a3b8; background-color: #f8fafc; }
+    .signature { font-weight: 700; color: #1e3a8a; margin-top: 5px; }
     @media screen and (max-width: 600px) {
-      .main {
-        margin-top: 0;
-        border-radius: 0;
-      }
-      .content {
-        padding: 30px 20px;
-      }
-      .info-item {
-        flex-direction: column;
-        text-align: left;
-      }
-      .value {
-        margin-top: 2px;
-      }
+      .main { border-radius: 0; }
+      .content { padding: 30px 20px; }
+      .info-item { flex-direction: column; text-align: left; }
+      .value { text-align: left; margin-top: 4px; }
     }
   </style>
 </head>
@@ -579,31 +469,24 @@ export class EmailService {
     <table class="main" align="center">
       <tr>
         <td class="header">
-          ${
-            logoUrl
-              ? `<img src="${logoUrl}" alt="Disparo Rápido" class="logo">`
-              : headerContent
-          }
+          <img src="${leadRapidoLogoUrl}" alt="Lead Rápido" class="logo" />
         </td>
       </tr>
       <tr>
         <td class="content">
-          <div class="greeting">Olá, ${friendlyName}!</div>
-          <p class="intro-text">
-            Sua Nota Fiscal de Serviço (NFS-e) relativa ao seu <strong>PLANO DISPARO RÁPIDO</strong>
-            foi emitida e autorizada com sucesso.
-          </p>
+          <div class="greeting">Sua Nota Fiscal chegou, ${friendlyName}!</div>
+          <p class="intro-text">A NFS-e da sua compra foi emitida e autorizada com sucesso.</p>
 
-          <div class="summary-title">Resumo da fatura:</div>
+          <div class="summary-title">Resumo da nota:</div>
           <div class="info-box">
             <div class="info-item">
               <span class="label">Serviço:</span>
-              <span class="value">Licenciamento Disparo Rápido</span>
+              <span class="value">${friendlyService}</span>
             </div>
             ${
               formattedValue
                 ? `<div class="info-item">
-                     <span class="label">Valor total:</span>
+                     <span class="label">Valor:</span>
                      <span class="value">R$ ${formattedValue}</span>
                    </div>`
                 : ''
@@ -618,19 +501,22 @@ export class EmailService {
             }
           </div>
 
-          <div class="attachment-note">
-            📎 <strong>Nota Fiscal (PDF e XML) seguem em anexo a este e-mail.</strong>
+          <div class="button-container">
+            <a href="${primaryInvoiceUrl}" class="btn-download">ACESSAR NOTA FISCAL</a>
           </div>
 
-          <div class="tip-box">
-            <strong>Dica:</strong> Guarde este e-mail para facilitar sua conciliação bancária ao final do mês.
-          </div>
+          ${linksHtml}
         </td>
       </tr>
       <tr>
         <td class="footer">
-          <div class="signature">contato@disparorapido.com.br</div>
-          <p style="margin-top: 15px;">&copy; ${new Date().getFullYear()} Disparo Rápido. Todos os direitos reservados.</p>
+          <div class="signature">contato@leadrapido.com.br</div>
+          <p style="margin-top: 15px;">
+            <strong>M F SILVA TECNOLOGIA DA INFORMAÇÃO LTDA</strong><br/>
+            CNPJ: 35.185.351/0001-07<br/>
+            Franca - SP
+          </p>
+          <p style="margin-top: 20px;">&copy; ${new Date().getFullYear()} Lead Rápido. Todos os direitos reservados.</p>
         </td>
       </tr>
     </table>
@@ -642,15 +528,15 @@ export class EmailService {
       const textLines: string[] = [];
       textLines.push(`Olá, ${friendlyName}!`);
       textLines.push(
-        'Sua Nota Fiscal de Serviço (NFS-e) relativa ao seu PLANO DISPARO RÁPIDO foi emitida e autorizada com sucesso.'
+        'Sua Nota Fiscal de Serviço (NFS-e) relativa ao seu PLANO LEAD RÁPIDO foi emitida e autorizada com sucesso.'
       );
       textLines.push('');
       textLines.push('Resumo da fatura:');
-      textLines.push('- Serviço: Licenciamento Disparo Rápido');
+      textLines.push(`- Serviço: ${friendlyService}`);
       if (formattedValue) textLines.push(`- Valor total: R$ ${formattedValue}`);
       if (invoiceNumber) textLines.push(`- Número da NF: #${invoiceNumber}`);
       textLines.push('');
-      textLines.push('Nota Fiscal (PDF e XML) seguem em anexo a este e-mail.');
+      textLines.push('A Nota Fiscal foi emitida e está disponível nos links abaixo.');
       if (pdfUrl) textLines.push(`PDF: ${pdfUrl}`);
       if (xmlUrl) textLines.push(`XML: ${xmlUrl}`);
       textLines.push('');
@@ -659,16 +545,16 @@ export class EmailService {
       const info = await this.transporter.sendMail({
         from: `"${smtpConfig.fromName}" <${smtpConfig.from}>`,
         to,
-        subject: 'Sua Nota Fiscal da Disparo Rápido',
+        subject: 'Sua Nota Fiscal chegou! - Lead Rápido',
         html: htmlContent,
         text: textLines.join('\n'),
-        ...(attachments.length > 0 && { attachments }),
+        ...(invoiceAttachments.length > 0 && { attachments: invoiceAttachments }),
       });
 
       this.logger.info('✅ Email de nota fiscal enviado com sucesso', {
         to,
         messageId: info.messageId,
-        attachmentsCount: attachments.length,
+        attachmentsCount: invoiceAttachments.length,
       });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));

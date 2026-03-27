@@ -68,9 +68,6 @@ COPY --from=prod-deps --chown=nodejs:nodejs /app/node_modules ./node_modules
 COPY --from=build     --chown=nodejs:nodejs /app/package*.json ./
 COPY --from=build     --chown=nodejs:nodejs /app/knexfile.cjs ./
 
-# Copia diretório de migrations necessário para produção
-COPY --from=build     --chown=nodejs:nodejs /app/supabase ./supabase
-
 # Copia script de inicialização (normaliza CRLF→LF para evitar "No such file or directory" no Alpine)
 COPY --chown=nodejs:nodejs entrypoint.sh ./entrypoint.sh
 RUN sed -i 's/\r$//' ./entrypoint.sh && chmod +x ./entrypoint.sh

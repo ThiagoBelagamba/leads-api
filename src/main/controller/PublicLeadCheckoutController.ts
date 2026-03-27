@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import axios from 'axios';
 import { Request, Response } from 'express';
 import { AsaasService } from '@main/infrastructure/services/AsaasService';
 import { EmailService } from '@main/infrastructure/services/EmailService';
@@ -32,6 +33,10 @@ interface LeadPurchaseRecord {
   status: 'pending' | 'paid';
   createdAt: string;
   paidAt?: string;
+  invoiceId?: string;
+  invoiceStatus?: string;
+  invoiceIssuedAt?: string;
+  invoiceError?: string;
 }
 
 interface CouponConfig {
@@ -54,7 +59,7 @@ const EXCLUDED_CSV_COLUMNS = new Set([
 
 const DEFAULT_CATALOG: Record<string, LeadCatalogItem[]> = {
   SP: [
-    { segment: 'auto peças', availableLeads: 12265 },
+    { segment: 'Auto Peças', availableLeads: 12265 },
     { segment: 'Padaria', availableLeads: 2000 },
     { segment: 'Academia', availableLeads: 1800 },
     { segment: 'Autoescola', availableLeads: 1250 },
@@ -62,6 +67,12 @@ const DEFAULT_CATALOG: Record<string, LeadCatalogItem[]> = {
     { segment: 'Restaurante', availableLeads: 2600 },
   ],
 };
+
+class LinkedHeaderSet {
+  private readonly map = new Map<string, true>();
+  add(key: string): void { this.map.set(key, true); }
+  toArray(): string[] { return Array.from(this.map.keys()); }
+}
 
 export class PublicLeadCheckoutController {
   private readonly asaasService: AsaasService;
@@ -182,6 +193,7 @@ export class PublicLeadCheckoutController {
         bairro,
         cidade,
         uf,
+        cidadeIbge,
         creditCard,
         couponCode,
       } = req.body as Record<string, any>;
@@ -237,6 +249,7 @@ export class PublicLeadCheckoutController {
         bairro,
         cidade,
         uf,
+        cidadeIbge,
       });
 
       const paymentPayload: any = {
@@ -257,7 +270,10 @@ export class PublicLeadCheckoutController {
           !creditCard?.ccv ||
           !cpfCnpj ||
           !cep ||
-          !addressNumber
+          !addressNumber ||
+          !endereco ||
+          !bairro ||
+          !uf
         ) {
           this.respondError(
             res,
@@ -281,8 +297,8 @@ export class PublicLeadCheckoutController {
           cpfCnpj: String(cpfCnpj).replace(/\D/g, ''),
           postalCode: String(cep).replace(/\D/g, ''),
           addressNumber: String(addressNumber),
-          addressComplement: [bairro, cidade].filter(Boolean).join(' - ').trim(),
           phone: String(buyerWhatsapp).replace(/\D/g, ''),
+          mobilePhone: String(buyerWhatsapp).replace(/\D/g, ''),
         };
         paymentPayload.remoteIp = req.ip;
       }
@@ -381,23 +397,248 @@ export class PublicLeadCheckoutController {
         return;
       }
 
-      const payload = req.body as { event?: string; payment?: { id?: string; status?: string } };
+      const payload = req.body as {
+        event?: string;
+        payment?: { id?: string; status?: string };
+        invoice?: {
+          id?: string;
+          customer?: string;
+          payment?: string;
+          status?: string;
+          serviceDescription?: string;
+          pdfUrl?: string | null;
+          xmlUrl?: string | null;
+          number?: string | null;
+          value?: number | null;
+        };
+      };
       const event = String(payload.event || '');
       const paymentId = String(payload.payment?.id || '');
 
-      if (!paymentId) {
-        res.status(200).json({ received: true });
-        return;
+      if (event === 'PAYMENT_RECEIVED' || event === 'PAYMENT_CONFIRMED') {
+        if (!paymentId) {
+          res.status(200).json({ received: true });
+          return;
+        }
+        await this.markAndFulfillIfNeeded(paymentId);
       }
 
-      if (event === 'PAYMENT_RECEIVED' || event === 'PAYMENT_CONFIRMED') {
-        await this.markAndFulfillIfNeeded(paymentId);
+      if (event === 'INVOICE_AUTHORIZED') {
+        await this.handleInvoiceAuthorizedWebhook(payload.invoice);
       }
 
       res.status(200).json({ received: true });
     } catch (error) {
       this.logger.error('Erro no webhook público de leads', error as Error);
       res.status(200).json({ received: true });
+    }
+  }
+
+  private async handleInvoiceAuthorizedWebhook(
+    invoice:
+      | {
+          id?: string;
+          customer?: string;
+          payment?: string;
+          status?: string;
+          serviceDescription?: string;
+          pdfUrl?: string | null;
+          xmlUrl?: string | null;
+          number?: string | null;
+          value?: number | null;
+        }
+      | undefined
+  ): Promise<void> {
+    if (!invoice?.id) {
+      this.logger.warn('INVOICE_AUTHORIZED recebido sem invoice.id');
+      return;
+    }
+
+    const paymentId = String(invoice.payment || '').trim();
+    const customerId = String(invoice.customer || '').trim();
+    const records = await this.readPurchases();
+    const recordIndex = paymentId
+      ? records.findIndex((r) => r.asaasPaymentId === paymentId)
+      : records.findIndex((r) => r.asaasCustomerId === customerId);
+
+    if (recordIndex < 0) {
+      this.logger.warn('Compra não encontrada para webhook INVOICE_AUTHORIZED', {
+        invoiceId: invoice.id,
+        paymentId,
+        customerId,
+      });
+      return;
+    }
+
+    const record = records[recordIndex];
+    const attachments: Array<{ filename: string; content: Buffer }> = [];
+    const pdfUrl = invoice.pdfUrl || undefined;
+    const xmlUrl = invoice.xmlUrl || undefined;
+
+    if (pdfUrl) {
+      try {
+        const response = await axios.get<ArrayBuffer>(pdfUrl, { responseType: 'arraybuffer' });
+        attachments.push({
+          filename: `NF-${invoice.number || invoice.id}.pdf`,
+          content: Buffer.from(response.data),
+        });
+      } catch (err) {
+        this.logger.warn('Falha ao baixar PDF da nota fiscal; email será enviado sem anexo PDF', {
+          invoiceId: invoice.id,
+          pdfUrl,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    if (xmlUrl) {
+      try {
+        const response = await axios.get<ArrayBuffer>(xmlUrl, { responseType: 'arraybuffer' });
+        attachments.push({
+          filename: `NF-${invoice.number || invoice.id}.xml`,
+          content: Buffer.from(response.data),
+        });
+      } catch (err) {
+        this.logger.warn('Falha ao baixar XML da nota fiscal; email será enviado sem anexo XML', {
+          invoiceId: invoice.id,
+          xmlUrl,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    await this.emailService.sendInvoiceEmail({
+      to: record.buyerEmail,
+      nome: record.buyerName,
+      invoiceNumber: invoice.number || invoice.id || null,
+      value: typeof invoice.value === 'number' ? invoice.value : record.chargedAmount,
+      serviceDescription: invoice.serviceDescription || null,
+      pdfUrl: pdfUrl || null,
+      xmlUrl: xmlUrl || null,
+      attachments,
+    });
+
+    record.invoiceId = invoice.id || record.invoiceId;
+    record.invoiceStatus = String(invoice.status || 'AUTHORIZED');
+    if (!record.invoiceIssuedAt) record.invoiceIssuedAt = new Date().toISOString();
+    record.invoiceError = undefined;
+    await fs.promises.writeFile(this.purchasesFile, JSON.stringify(records, null, 2), 'utf8');
+  }
+
+  async promoteStaging(req: Request, res: Response): Promise<void> {
+    try {
+      if (!this.isAdminAuthorized(req)) {
+        this.respondError(res, 401, 'UNAUTHORIZED_ADMIN', 'Não autorizado.');
+        return;
+      }
+      if (!this.supabase) {
+        this.respondError(res, 500, 'SUPABASE_NOT_CONFIGURED', 'Supabase não configurado na API.');
+        return;
+      }
+
+      type StagingRow = {
+        place_id: string | null;
+        estado: string | null;
+        segmento: string | null;
+        nome: string | null;
+        whatsapp: string | null;
+        telefone: string | null;
+        email: string | null;
+        site: string | null;
+        endereco: string | null;
+        cidade: string | null;
+        uf: string | null;
+        payload: unknown;
+      };
+
+      const PROMOTE_COLUMNS = 'place_id,estado,segmento,nome,whatsapp,telefone,email,site,endereco,cidade,uf,payload';
+      const pageSize = 500;
+      let offset = 0;
+      let promoted = 0;
+      let skipped = 0;
+
+      while (true) {
+        const { data: stagingRows, error: fetchError } = await this.supabase
+          .from('leadrapido_staging')
+          .select(PROMOTE_COLUMNS)
+          .range(offset, offset + pageSize - 1) as { data: StagingRow[] | null; error: { message: string } | null };
+
+        if (fetchError) {
+          this.respondError(res, 500, 'PROMOTE_FETCH_FAILED', `Erro ao ler staging: ${fetchError.message}`);
+          return;
+        }
+
+        if (!stagingRows || stagingRows.length === 0) break;
+
+        const validRows = stagingRows.filter((r) => r.place_id && String(r.place_id).trim());
+        skipped += stagingRows.length - validRows.length;
+
+        // Deduplica por place_id dentro do chunk (mantém o último registro)
+        const deduped = Object.values(
+          validRows.reduce<Record<string, StagingRow>>((acc, row) => {
+            acc[String(row.place_id)] = row;
+            return acc;
+          }, {})
+        );
+
+        // Se a coluna "nome" estiver vazia, tenta preencher a partir do payload (ex: nome_empresa).
+        const dedupedWithNome = deduped.map((r) => {
+          const currentNome = r.nome ? String(r.nome).trim() : '';
+          if (currentNome) return r;
+
+          let payloadObj: any = null;
+          if (r.payload && typeof r.payload === 'string') {
+            try {
+              payloadObj = JSON.parse(r.payload);
+            } catch {
+              payloadObj = null;
+            }
+          } else if (r.payload && typeof r.payload === 'object') {
+            payloadObj = r.payload as any;
+          }
+
+          const nomeFromPayload = payloadObj?.nome_empresa ?? payloadObj?.nome ?? payloadObj?.nomeEmpresa;
+          const nome = nomeFromPayload ? String(nomeFromPayload) : r.nome;
+          return { ...r, nome };
+        });
+
+        if (dedupedWithNome.length > 0) {
+          const { error: upsertError } = await this.supabase
+            .from('leadrapido')
+            .upsert(dedupedWithNome, { onConflict: 'place_id' });
+
+          if (upsertError) {
+            this.logger.error('Erro ao fazer upsert na leadrapido', undefined, {
+              offset,
+              error: upsertError.message,
+            });
+            this.respondError(res, 500, 'PROMOTE_UPSERT_FAILED', `Erro ao promover leads: ${upsertError.message}`);
+            return;
+          }
+
+          promoted += dedupedWithNome.length;
+        }
+
+        if (stagingRows.length < pageSize) break;
+        offset += pageSize;
+      }
+
+      const { error: truncateError } = await this.supabase.rpc('truncate_leadrapido_staging');
+      if (truncateError) {
+        this.logger.warn('Promote concluído mas falhou ao limpar staging', { error: truncateError.message });
+      }
+
+      this.logger.info('Staging promovido para leadrapido com sucesso', { promoted, skipped });
+
+      res.status(200).json({
+        success: true,
+        message: 'Base de leads atualizada com sucesso. Staging limpa.',
+        promotedRows: promoted,
+        skippedRows: skipped,
+      });
+    } catch (error) {
+      this.logger.error('Erro ao promover staging para leadrapido', error as Error);
+      this.respondError(res, 500, 'PROMOTE_STAGING_FAILED', 'Erro ao atualizar base de leads.');
     }
   }
 
@@ -425,10 +666,49 @@ export class PublicLeadCheckoutController {
         return;
       }
 
+      const STAGING_COLUMNS = new Set([
+        'place_id', 'estado', 'segmento', 'nome', 'whatsapp',
+        'telefone', 'email', 'site', 'endereco', 'cidade', 'uf', 'payload',
+      ]);
+
+      const filteredRows = rows.map((row) => {
+        const filtered: Record<string, unknown> = {};
+        const extra: Record<string, string> = {};
+
+        for (const [key, value] of Object.entries(row)) {
+          const normalizedKey = key.trim().toLowerCase();
+          // Padronização: o CSV costuma vir com "nome_empresa", mas a tabela usa a coluna "nome".
+          if (normalizedKey === 'nome_empresa') {
+            filtered['nome'] = value;
+            continue;
+          }
+
+          if (STAGING_COLUMNS.has(normalizedKey)) {
+            if (normalizedKey === 'payload') {
+              try {
+                filtered['payload'] = typeof value === 'string' ? JSON.parse(value) : value;
+              } catch {
+                filtered['payload'] = null;
+              }
+            } else {
+              filtered[normalizedKey] = value;
+            }
+          } else {
+            extra[key] = value;
+          }
+        }
+
+        if (Object.keys(extra).length > 0 && !filtered['payload']) {
+          filtered['payload'] = extra;
+        }
+
+        return filtered;
+      });
+
       const chunkSize = 500;
       let inserted = 0;
-      for (let i = 0; i < rows.length; i += chunkSize) {
-        const chunk = rows.slice(i, i + chunkSize);
+      for (let i = 0; i < filteredRows.length; i += chunkSize) {
+        const chunk = filteredRows.slice(i, i + chunkSize);
         const { error } = await this.supabase.from('leadrapido_staging').insert(chunk);
         if (error) {
           this.logger.error('Erro ao inserir CSV na tabela leadrapido_staging', undefined, {
@@ -445,7 +725,7 @@ export class PublicLeadCheckoutController {
       res.status(200).json({
         success: true,
         message: 'Upload realizado com sucesso na leadrapido_staging.',
-        totalRows: rows.length,
+        totalRows: filteredRows.length,
         insertedRows: inserted,
       });
     } catch (error) {
@@ -641,22 +921,27 @@ export class PublicLeadCheckoutController {
     bairro?: string;
     cidade?: string;
     uf?: string;
+    cidadeIbge?: string;
   }): Promise<{ id: string }> {
     const cleanDoc = (input.cpfCnpj || '').replace(/\D/g, '');
     const foundByEmail = await this.asaasService.findCustomerByEmail(input.buyerEmail);
     if (foundByEmail) {
+      const city = input.cidadeIbge && /^\d+$/.test(String(input.cidadeIbge)) ? Number(input.cidadeIbge) : undefined;
       await this.asaasService.updateCustomer(foundByEmail.id, {
         postalCode: input.cep ? String(input.cep).replace(/\D/g, '') : undefined,
         addressNumber: input.addressNumber || undefined,
         address: input.endereco || undefined,
-        complement: [input.bairro, input.cidade].filter(Boolean).join(' - ').trim() || undefined,
-        province: input.uf ? String(input.uf).toUpperCase().slice(0, 2) : undefined,
+        // `province` no Asaas é BAIRRO. Não enviar UF aqui.
+        province: input.bairro ? String(input.bairro).trim() : undefined,
+        // Complemento deve ser complemento de endereço (apto, bloco, etc). Não usar bairro/cidade aqui.
+        ...(city ? { city } : {}),
       } as any);
       return { id: foundByEmail.id };
     }
 
     const fallbackDoc = cleanDoc.length === 11 || cleanDoc.length === 14 ? cleanDoc : '00000000000';
     const cleanPhone = String(input.buyerWhatsapp).replace(/\D/g, '');
+    const city = input.cidadeIbge && /^\d+$/.test(String(input.cidadeIbge)) ? Number(input.cidadeIbge) : undefined;
     const customer = await this.asaasService.createCustomer({
       name: input.buyerName,
       email: input.buyerEmail,
@@ -666,8 +951,10 @@ export class PublicLeadCheckoutController {
       postalCode: input.cep ? String(input.cep).replace(/\D/g, '') : undefined,
       addressNumber: input.addressNumber || undefined,
       address: input.endereco || undefined,
-      complement: [input.bairro, input.cidade].filter(Boolean).join(' - ').trim() || undefined,
-      province: input.uf ? String(input.uf).toUpperCase().slice(0, 2) : undefined,
+      // `province` no Asaas é BAIRRO. Não enviar UF aqui.
+      province: input.bairro ? String(input.bairro).trim() : undefined,
+      // Complemento deve ser complemento de endereço (apto, bloco, etc). Não usar bairro/cidade aqui.
+      ...(city ? { city } : {}),
     } as any);
     return { id: customer.id };
   }
@@ -698,11 +985,164 @@ export class PublicLeadCheckoutController {
     const records = await this.readPurchases();
     const index = records.findIndex((r) => r.asaasPaymentId === asaasPaymentId);
     if (index < 0) return;
-    if (records[index].status === 'paid') return;
-    records[index].status = 'paid';
-    records[index].paidAt = new Date().toISOString();
-    await fs.promises.writeFile(this.purchasesFile, JSON.stringify(records, null, 2), 'utf8');
-    await this.fulfillPurchase(records[index]);
+    const record = records[index];
+    const wasAlreadyPaid = record.status === 'paid';
+    if (!wasAlreadyPaid) {
+      record.status = 'paid';
+      record.paidAt = new Date().toISOString();
+      await fs.promises.writeFile(this.purchasesFile, JSON.stringify(records, null, 2), 'utf8');
+      await this.fulfillPurchase(record);
+    }
+
+    const invoiceUpdated = await this.issueInvoiceIfEnabled(record);
+    if (invoiceUpdated) {
+      await fs.promises.writeFile(this.purchasesFile, JSON.stringify(records, null, 2), 'utf8');
+    }
+  }
+
+  private async issueInvoiceIfEnabled(record: LeadPurchaseRecord): Promise<boolean> {
+    const enabled = String(process.env.INVOICE_ON_PAYMENT_CONFIRMED || '').toLowerCase() === 'true';
+    if (!enabled) return false;
+    if (record.invoiceIssuedAt || record.invoiceId) return false;
+
+    const serviceDescription = String(process.env.INVOICE_SERVICE_DESCRIPTION || '').trim();
+    if (!serviceDescription) {
+      record.invoiceError = 'INVOICE_SERVICE_DESCRIPTION não configurado';
+      this.logger.warn('NFS-e habilitada, mas INVOICE_SERVICE_DESCRIPTION não está configurado', {
+        paymentId: record.asaasPaymentId,
+        buyerEmail: record.buyerEmail,
+      });
+      return true;
+    }
+
+    let municipalServiceId = String(process.env.INVOICE_MUNICIPAL_SERVICE_ID || '').trim();
+    let detectedIssTax: number | undefined;
+    const municipalServiceCode = String(process.env.INVOICE_MUNICIPAL_SERVICE_CODE || '').trim();
+    const municipalServiceName = String(process.env.INVOICE_MUNICIPAL_SERVICE_NAME || '').trim();
+    const observations = String(process.env.INVOICE_OBSERVATIONS || '').trim();
+
+    try {
+      // municipalServiceId do Asaas é um ID numérico (ex: "3544"), não o código/descrição (ex: "7319002").
+      if (municipalServiceId && !/^\d+$/.test(municipalServiceId)) {
+        this.logger.warn('INVOICE_MUNICIPAL_SERVICE_ID inválido (esperado ID numérico do Asaas). Ignorando valor.', {
+          municipalServiceId,
+        });
+        municipalServiceId = '';
+      }
+
+      // Se não foi informado o municipalServiceId, tenta descobrir pelo Asaas (serviços fiscais cadastrados).
+      if (!municipalServiceId) {
+        const queries = Array.from(
+          new Set(
+            [
+              municipalServiceCode,
+              // tenta extrair códigos do texto (1706, 7319002, etc)
+              ...(municipalServiceName.match(/\b\d{4,8}\b/g) || []),
+              ...(serviceDescription.match(/\b\d{4,8}\b/g) || []),
+              municipalServiceName,
+            ].filter(Boolean)
+          )
+        );
+
+        for (const query of queries) {
+          try {
+            const result = await this.asaasService.listMunicipalServices({ limit: 100, offset: 0, description: query });
+            const normalizedQuery = String(query).toLowerCase();
+            const match =
+              result.data.find((s) => s.description?.toLowerCase().includes(normalizedQuery)) ||
+              (municipalServiceCode ? result.data.find((s) => s.description?.includes(municipalServiceCode)) : undefined) ||
+              (result.data.length === 1 ? result.data[0] : undefined);
+            if (match?.id) {
+              municipalServiceId = String(match.id);
+              detectedIssTax = Number(match.issTax);
+              this.logger.info('Serviço municipal detectado automaticamente para NFS-e', {
+                municipalServiceId,
+                description: match.description,
+                matchedBy: query,
+                issTax: Number.isFinite(detectedIssTax) ? detectedIssTax : null,
+              });
+              break;
+            }
+          } catch (e) {
+            this.logger.warn('Falha ao buscar serviços municipais no Asaas; tentando emitir com taxes', {
+              error: e instanceof Error ? e.message : String(e),
+              query,
+            });
+          }
+        }
+      }
+
+      // Algumas contas do Asaas exigem taxes mesmo com municipalServiceId.
+      // Enviaremos sempre taxes (com fallback no issTax do serviço detectado).
+      const envIss = Number(process.env.INVOICE_TAX_ISS);
+      const taxes = {
+        retainIss: String(process.env.INVOICE_TAX_RETAIN_ISS || '').toLowerCase() === 'true',
+        iss: Number.isFinite(envIss) && envIss > 0 ? envIss : Number.isFinite(detectedIssTax) ? Number(detectedIssTax) : 0,
+        pis: Number(process.env.INVOICE_TAX_PIS || 0),
+        cofins: Number(process.env.INVOICE_TAX_COFINS || 0),
+        csll: Number(process.env.INVOICE_TAX_CSLL || 0),
+        inss: Number(process.env.INVOICE_TAX_INSS || 0),
+        ir: Number(process.env.INVOICE_TAX_IR || 0),
+      };
+
+      if (!municipalServiceId) {
+        const anyTaxConfigured =
+          Number.isFinite(taxes.iss) &&
+          (taxes.iss > 0 ||
+            taxes.pis > 0 ||
+            taxes.cofins > 0 ||
+            taxes.csll > 0 ||
+            taxes.inss > 0 ||
+            taxes.ir > 0);
+        if (!anyTaxConfigured) {
+          record.invoiceError =
+            'NFS-e: configure INVOICE_MUNICIPAL_SERVICE_ID (recomendado) ou defina pelo menos INVOICE_TAX_ISS > 0.';
+          this.logger.warn('NFS-e bloqueada: impostos não configurados e serviço municipal não encontrado', {
+            paymentId: record.asaasPaymentId,
+            municipalServiceCode,
+            municipalServiceName,
+          });
+          return true;
+        }
+      }
+
+      const scheduled = await this.asaasService.scheduleInvoiceForPayment({
+        payment: record.asaasPaymentId,
+        value: Number(record.chargedAmount),
+        serviceDescription,
+        observations,
+        effectiveDate: this.getTodayIsoDate(),
+        ...(municipalServiceId ? { municipalServiceId } : {}),
+        ...(municipalServiceCode ? { municipalServiceCode } : {}),
+        ...(municipalServiceName ? { municipalServiceName } : {}),
+        taxes,
+      });
+
+      const authorized = await this.asaasService.authorizeInvoice(scheduled.id);
+      record.invoiceId = scheduled.id;
+      record.invoiceStatus = authorized.status || scheduled.status || 'AUTHORIZED';
+      record.invoiceIssuedAt = new Date().toISOString();
+      record.invoiceError = undefined;
+
+      // O envio do email da NFS-e é realizado no webhook INVOICE_AUTHORIZED,
+      // pois o payload do webhook já traz pdfUrl/xmlUrl prontos para anexo.
+
+      this.logger.info('NFS-e emitida com sucesso para compra de leads', {
+        paymentId: record.asaasPaymentId,
+        invoiceId: record.invoiceId,
+        invoiceStatus: record.invoiceStatus,
+        buyerEmail: record.buyerEmail,
+      });
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Erro desconhecido ao emitir NFS-e';
+      record.invoiceError = message;
+      this.logger.error('Falha ao emitir NFS-e após confirmação de pagamento', error as Error, {
+        paymentId: record.asaasPaymentId,
+        buyerEmail: record.buyerEmail,
+      });
+      return true;
+    }
   }
 
   private async fulfillPurchase(record: LeadPurchaseRecord): Promise<void> {
@@ -774,14 +1214,41 @@ export class PublicLeadCheckoutController {
     return rows;
   }
 
+  private flattenRows(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+    return rows.map((row) => {
+      const flat: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(row)) {
+        if (EXCLUDED_CSV_COLUMNS.has(key.toLowerCase())) continue;
+        if (key === 'payload' && value !== null && typeof value === 'object' && !Array.isArray(value)) {
+          for (const [pk, pv] of Object.entries(value as Record<string, unknown>)) {
+            if (!EXCLUDED_CSV_COLUMNS.has(pk.toLowerCase()) && !(pk in flat)) {
+              flat[pk] = pv;
+            }
+          }
+        } else {
+          flat[key] = value;
+        }
+      }
+      return flat;
+    });
+  }
+
   private toCsv(rows: Array<Record<string, unknown>>): string {
     if (rows.length === 0) return '';
-    const headers = Object.keys(rows[0]).filter(
-      (header) => !EXCLUDED_CSV_COLUMNS.has(String(header || '').toLowerCase())
-    );
+
+    const flatRows = this.flattenRows(rows);
+
+    // Coleta todos os headers únicos preservando a ordem
+    const headerSet = new LinkedHeaderSet();
+    for (const row of flatRows) {
+      for (const key of Object.keys(row)) {
+        headerSet.add(key);
+      }
+    }
+    const headers = headerSet.toArray();
     const lines = [headers.join(',')];
 
-    for (const row of rows) {
+    for (const row of flatRows) {
       const values = headers.map((header) => this.escapeCsvValue(row[header]));
       lines.push(values.join(','));
     }
@@ -791,6 +1258,9 @@ export class PublicLeadCheckoutController {
 
   private escapeCsvValue(value: unknown): string {
     if (value === null || value === undefined) return '';
+    if (typeof value === 'object') {
+      return this.escapeCsvValue(JSON.stringify(value));
+    }
     const text = String(value);
     if (/[",\n\r]/.test(text)) {
       return `"${text.replace(/"/g, '""')}"`;
