@@ -27,39 +27,16 @@ FROM node:${NODE_VERSION} AS runtime
 ARG SERVICE_TYPE=api
 ENV NODE_ENV=production \
     SERVICE_TYPE=${SERVICE_TYPE} \
-    NODE_OPTIONS="--dns-result-order=ipv4first" \
-    # Configurações do Puppeteer para usar Chromium do sistema
-    PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser \
-    CHROME_BIN=/usr/bin/chromium-browser \
-    CHROME_PATH=/usr/bin/chromium-browser
+    NODE_OPTIONS="--dns-result-order=ipv4first"
 
-# utilitários, init e dependências do Puppeteer/Chrome
+# utilitários mínimos de runtime para API
 RUN addgroup -g 1001 -S nodejs \
  && adduser -S nodejs -u 1001 \
  && apk add --no-cache \
     dumb-init \
     curl \
     bind-tools \
-    # Dependências necessárias para o Puppeteer/Chrome no Alpine
-    chromium \
-    nss \
-    freetype \
-    freetype-dev \
-    harfbuzz \
-    ca-certificates \
-    ttf-freefont \
-    # Dependências adicionais para estabilidade do Chrome no Alpine
-    libxrandr \
-    alsa-lib \
-    at-spi2-core \
-    cups-libs \
-    gtk+3.0 \
-    libdrm \
-    libxcomposite \
-    libxdamage \
-    libxfixes \
-    mesa-gbm
+    ca-certificates
 WORKDIR /app
 
 # Copia artefatos de build e deps podados
@@ -72,14 +49,7 @@ COPY --from=build     --chown=nodejs:nodejs /app/knexfile.cjs ./
 COPY --chown=nodejs:nodejs entrypoint.sh ./entrypoint.sh
 RUN sed -i 's/\r$//' ./entrypoint.sh && chmod +x ./entrypoint.sh
 
-# Criar diretório cache do Puppeteer para o usuário nodejs
-RUN mkdir -p /home/nodejs/.cache/puppeteer \
- && chown -R nodejs:nodejs /home/nodejs/.cache
-
 USER nodejs
-
-# Configurar cache do Puppeteer para o usuário nodejs
-ENV PUPPETEER_CACHE_DIR=/home/nodejs/.cache/puppeteer
 
 # Healthcheck por tipo de serviço
 # HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

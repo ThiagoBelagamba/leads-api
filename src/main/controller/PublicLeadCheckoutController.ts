@@ -2,9 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
 import { Request, Response } from 'express';
-import { AsaasService } from '@main/infrastructure/services/AsaasService';
-import { EmailService } from '@main/infrastructure/services/EmailService';
-import { Logger } from '@main/infrastructure/logging/Logger';
+import { AsaasService } from '../infrastructure/services/AsaasService';
+import { EmailService } from '../infrastructure/services/EmailService';
+import { Logger } from '../infrastructure/logging/Logger';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 type PaymentMethod = 'PIX' | 'CREDIT_CARD';

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { PublicLeadCheckoutController } from '@controller/PublicLeadCheckoutController';
+import { PublicLeadCheckoutController } from '../controller/PublicLeadCheckoutController';
 
 const router = Router();
 const controller = new PublicLeadCheckoutController();

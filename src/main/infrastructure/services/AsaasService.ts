@@ -5,7 +5,7 @@
 
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import dotenv from 'dotenv';
-import { Logger } from '@main/infrastructure/logging/Logger';
+import { Logger } from '../logging/Logger';
 
 export interface AsaasCreateSubscriptionPayload {
   customer: string;

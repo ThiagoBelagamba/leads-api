@@ -7,8 +7,8 @@
 import fs from 'fs';
 import path from 'path';
 import nodemailer from 'nodemailer';
-import { Logger } from '@main/infrastructure/logging/Logger';
-import { getSmtpConfig } from '@main/infrastructure/config/SmtpConfig';
+import { Logger } from '../logging/Logger';
+import { getSmtpConfig } from '../config/SmtpConfig';
 
 /** Nomes dos PDFs de boas-vindas (devem estar no volume montado em WELCOME_PDFS_PATH). */
 const WELCOME_PDF_FILENAMES = [

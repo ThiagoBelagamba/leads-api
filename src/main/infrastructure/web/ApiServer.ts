@@ -4,7 +4,7 @@ import type { Server } from 'http';
 import { randomUUID } from 'crypto';
 import dotenv from 'dotenv';
 import { Logger } from '../logging/Logger';
-import publicLeadRoutes from '@main/routes/PublicLeadCheckoutRoutes';
+import publicLeadRoutes from '../../routes/PublicLeadCheckoutRoutes';
 
 dotenv.config({ override: true });
 
