@@ -57,6 +57,12 @@ const EXCLUDED_CSV_COLUMNS = new Set([
   'updatedat',
 ]);
 
+/** Colunas no DB/import; na planilha do cliente saem como whatsapp_verificado / telefone_verificado. */
+const EVOLUTION_VERIFICATION_TO_CLIENT_CSV: Record<string, string> = {
+  whatsapp_valido_evolution: 'whatsapp_verificado',
+  telefone_valido_evolution: 'telefone_verificado',
+};
+
 const DEFAULT_CATALOG: Record<string, LeadCatalogItem[]> = {
   SP: [
     { segment: 'Auto Peças', availableLeads: 12265 },
@@ -122,11 +128,17 @@ export class PublicLeadCheckoutController {
   }
 
   async getCatalog(_req: Request, res: Response): Promise<void> {
-    const catalog = await this.readCatalog();
-    const states = Object.keys(catalog).map((state) => ({
-      state,
-      segments: catalog[state],
-    }));
+    let catalog = await this.buildCatalogFromSupabase();
+    if (!catalog) {
+      catalog = await this.readCatalog();
+    }
+
+    const states = Object.keys(catalog)
+      .sort()
+      .map((state) => ({
+        state,
+        segments: catalog[state],
+      }));
 
     res.status(200).json({
       success: true,
@@ -548,14 +560,18 @@ export class PublicLeadCheckoutController {
         endereco: string | null;
         cidade: string | null;
         uf: string | null;
+        whatsapp_valido_evolution: boolean | null;
+        telefone_valido_evolution: boolean | null;
         payload: unknown;
       };
 
-      const PROMOTE_COLUMNS = 'place_id,estado,segmento,nome,whatsapp,telefone,email,site,endereco,cidade,uf,payload';
+      const PROMOTE_COLUMNS =
+        'place_id,estado,segmento,nome,whatsapp,telefone,email,site,endereco,cidade,uf,whatsapp_valido_evolution,telefone_valido_evolution,payload';
       const pageSize = 500;
       let offset = 0;
       let promoted = 0;
       let skipped = 0;
+      let skippedNoContact = 0;
 
       while (true) {
         const { data: stagingRows, error: fetchError } = await this.supabase
@@ -602,10 +618,13 @@ export class PublicLeadCheckoutController {
           return { ...r, nome };
         });
 
-        if (dedupedWithNome.length > 0) {
+        const withContact = dedupedWithNome.filter((r) => this.stagingRowHasContact(r));
+        skippedNoContact += dedupedWithNome.length - withContact.length;
+
+        if (withContact.length > 0) {
           const { error: upsertError } = await this.supabase
             .from('leadrapido')
-            .upsert(dedupedWithNome, { onConflict: 'place_id' });
+            .upsert(withContact, { onConflict: 'place_id' });
 
           if (upsertError) {
             this.logger.error('Erro ao fazer upsert na leadrapido', undefined, {
@@ -616,7 +635,7 @@ export class PublicLeadCheckoutController {
             return;
           }
 
-          promoted += dedupedWithNome.length;
+          promoted += withContact.length;
         }
 
         if (stagingRows.length < pageSize) break;
@@ -628,13 +647,18 @@ export class PublicLeadCheckoutController {
         this.logger.warn('Promote concluído mas falhou ao limpar staging', { error: truncateError.message });
       }
 
-      this.logger.info('Staging promovido para leadrapido com sucesso', { promoted, skipped });
+      this.logger.info('Staging promovido para leadrapido com sucesso', {
+        promoted,
+        skipped,
+        skippedNoContact,
+      });
 
       res.status(200).json({
         success: true,
         message: 'Base de leads atualizada com sucesso. Staging limpa.',
         promotedRows: promoted,
         skippedRows: skipped,
+        skippedNoContactRows: skippedNoContact,
       });
     } catch (error) {
       this.logger.error('Erro ao promover staging para leadrapido', error as Error);
@@ -669,9 +693,18 @@ export class PublicLeadCheckoutController {
       const STAGING_COLUMNS = new Set([
         'place_id', 'estado', 'segmento', 'nome', 'whatsapp',
         'telefone', 'email', 'site', 'endereco', 'cidade', 'uf', 'payload',
+        'whatsapp_valido_evolution', 'telefone_valido_evolution',
       ]);
 
-      const filteredRows = rows.map((row) => {
+      let skippedNoContact = 0;
+      const filteredRows: Record<string, unknown>[] = [];
+
+      for (const row of rows) {
+        if (!this.csvRowHasContact(row)) {
+          skippedNoContact += 1;
+          continue;
+        }
+
         const filtered: Record<string, unknown> = {};
         const extra: Record<string, string> = {};
 
@@ -690,6 +723,11 @@ export class PublicLeadCheckoutController {
               } catch {
                 filtered['payload'] = null;
               }
+            } else if (
+              normalizedKey === 'whatsapp_valido_evolution' ||
+              normalizedKey === 'telefone_valido_evolution'
+            ) {
+              filtered[normalizedKey] = this.parseCsvBoolean(value);
             } else {
               filtered[normalizedKey] = value;
             }
@@ -702,8 +740,18 @@ export class PublicLeadCheckoutController {
           filtered['payload'] = extra;
         }
 
-        return filtered;
-      });
+        filteredRows.push(filtered);
+      }
+
+      if (filteredRows.length === 0) {
+        this.respondError(
+          res,
+          400,
+          'CSV_NO_CONTACT_ROWS',
+          'Nenhuma linha com telefone, WhatsApp ou whatsapp_e164; nada foi inserido.'
+        );
+        return;
+      }
 
       const chunkSize = 500;
       let inserted = 0;
@@ -725,8 +773,9 @@ export class PublicLeadCheckoutController {
       res.status(200).json({
         success: true,
         message: 'Upload realizado com sucesso na leadrapido_staging.',
-        totalRows: filteredRows.length,
+        totalRows: rows.length,
         insertedRows: inserted,
+        skippedNoContactRows: skippedNoContact,
       });
     } catch (error) {
       this.logger.error('Erro ao processar upload CSV para staging', error as Error);
@@ -856,6 +905,38 @@ export class PublicLeadCheckoutController {
 
   private getCachedCatalog(): Record<string, LeadCatalogItem[]> {
     return this.cachedCatalog || DEFAULT_CATALOG;
+  }
+
+  private async buildCatalogFromSupabase(): Promise<Record<string, LeadCatalogItem[]> | null> {
+    if (!this.supabase) return null;
+
+    const { data, error } = await this.supabase.rpc('leadrapido_catalog_summary');
+
+    if (error) {
+      this.logger.warn('Falha ao carregar catálogo do Supabase, usando fallback arquivo', {
+        error: error.message,
+      });
+      return null;
+    }
+
+    if (!Array.isArray(data) || data.length === 0) {
+      return null;
+    }
+
+    type SummaryRow = { estado: string; segmento: string; available: number | string };
+    const catalog: Record<string, LeadCatalogItem[]> = {};
+
+    for (const raw of data as SummaryRow[]) {
+      const estado = String(raw.estado ?? '').trim();
+      const segmento = String(raw.segmento ?? '').trim();
+      if (!estado || !segmento) continue;
+      const n = Number(raw.available);
+      const availableLeads = Number.isFinite(n) ? n : 0;
+      if (!catalog[estado]) catalog[estado] = [];
+      catalog[estado].push({ segment: segmento, availableLeads });
+    }
+
+    return Object.keys(catalog).length > 0 ? catalog : null;
   }
 
   private async readCatalog(): Promise<Record<string, LeadCatalogItem[]>> {
@@ -1237,6 +1318,14 @@ export class PublicLeadCheckoutController {
     if (rows.length === 0) return '';
 
     const flatRows = this.flattenRows(rows);
+    for (const flat of flatRows) {
+      for (const [dbKey, clientKey] of Object.entries(EVOLUTION_VERIFICATION_TO_CLIENT_CSV)) {
+        if (Object.prototype.hasOwnProperty.call(flat, dbKey)) {
+          flat[clientKey] = this.formatEvolutionVerificationForCsv(flat[dbKey]);
+          delete flat[dbKey];
+        }
+      }
+    }
 
     // Coleta todos os headers únicos preservando a ordem
     const headerSet = new LinkedHeaderSet();
@@ -1291,6 +1380,63 @@ export class PublicLeadCheckoutController {
     if (!expectedToken) return false;
     const sentToken = String(req.headers['x-admin-token'] || req.body?.adminToken || '').trim();
     return sentToken.length > 0 && sentToken === expectedToken;
+  }
+
+  private parseCsvBoolean(value: unknown): boolean | null {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'boolean') return value;
+    const s = String(value).trim().toLowerCase();
+    if (s === '' || s === 'null') return null;
+    if (s === 'true' || s === '1' || s === 'yes' || s === 'sim') return true;
+    if (s === 'false' || s === '0' || s === 'no' || s === 'não' || s === 'nao') return false;
+    return null;
+  }
+
+  private csvRowHasContact(row: Record<string, string>): boolean {
+    const get = (name: string): string => {
+      for (const [k, v] of Object.entries(row)) {
+        if (k.trim().toLowerCase() === name) return String(v ?? '').trim();
+      }
+      return '';
+    };
+    return !!(get('telefone') || get('whatsapp') || get('whatsapp_e164'));
+  }
+
+  private resolvePayloadObject(payload: unknown): Record<string, unknown> | null {
+    if (payload == null) return null;
+    if (typeof payload === 'string') {
+      try {
+        const o = JSON.parse(payload) as unknown;
+        return o && typeof o === 'object' && !Array.isArray(o) ? (o as Record<string, unknown>) : null;
+      } catch {
+        return null;
+      }
+    }
+    if (typeof payload === 'object' && !Array.isArray(payload)) {
+      return payload as Record<string, unknown>;
+    }
+    return null;
+  }
+
+  private stagingRowHasContact(r: {
+    telefone?: string | null;
+    whatsapp?: string | null;
+    payload?: unknown;
+  }): boolean {
+    if (String(r.telefone ?? '').trim()) return true;
+    if (String(r.whatsapp ?? '').trim()) return true;
+    const p = this.resolvePayloadObject(r.payload);
+    const wa164 = p?.whatsapp_e164;
+    return !!String(wa164 ?? '').trim();
+  }
+
+  private formatEvolutionVerificationForCsv(value: unknown): string {
+    if (value === true) return 'verificado';
+    if (value === false) return 'não verificado';
+    const parsed = this.parseCsvBoolean(value);
+    if (parsed === true) return 'verificado';
+    if (parsed === false) return 'não verificado';
+    return '';
   }
 
   private parseCsvToObjects(content: string, delimiter: string = ','): Array<Record<string, string>> {
