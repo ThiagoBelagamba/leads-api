@@ -74,6 +74,20 @@ const DEFAULT_CATALOG: Record<string, LeadCatalogItem[]> = {
   ],
 };
 
+/** Nome do segmento na base: primeira letra de cada palavra em maiúscula (pt-BR), espaços colapsados. */
+function normalizeLeadrapidoSegment(raw: string): string {
+  const s = String(raw ?? '').trim();
+  if (!s) return s;
+  return s
+    .split(/\s+/)
+    .map((word) => {
+      const lower = word.toLocaleLowerCase('pt-BR');
+      if (!lower) return word;
+      return lower.charAt(0).toLocaleUpperCase('pt-BR') + lower.slice(1);
+    })
+    .join(' ');
+}
+
 class LinkedHeaderSet {
   private readonly map = new Map<string, true>();
   add(key: string): void { this.map.set(key, true); }
@@ -622,9 +636,16 @@ export class PublicLeadCheckoutController {
         skippedNoContact += dedupedWithNome.length - withContact.length;
 
         if (withContact.length > 0) {
+          const rowsForLeadrapido = withContact.map((r) => ({
+            ...r,
+            segmento:
+              r.segmento != null && String(r.segmento).trim()
+                ? normalizeLeadrapidoSegment(String(r.segmento))
+                : r.segmento,
+          }));
           const { error: upsertError } = await this.supabase
             .from('leadrapido')
-            .upsert(withContact, { onConflict: 'place_id' });
+            .upsert(rowsForLeadrapido, { onConflict: 'place_id' });
 
           if (upsertError) {
             this.logger.error('Erro ao fazer upsert na leadrapido', undefined, {
@@ -728,6 +749,8 @@ export class PublicLeadCheckoutController {
               normalizedKey === 'telefone_valido_evolution'
             ) {
               filtered[normalizedKey] = this.parseCsvBoolean(value);
+            } else if (normalizedKey === 'segmento') {
+              filtered[normalizedKey] = normalizeLeadrapidoSegment(String(value ?? ''));
             } else {
               filtered[normalizedKey] = value;
             }
