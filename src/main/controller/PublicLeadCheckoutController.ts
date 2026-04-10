@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { validateCheckoutTaxId, type BuyerKind } from '../utils/taxId';
 import axios from 'axios';
 import { Request, Response } from 'express';
 import { AsaasService } from '../infrastructure/services/AsaasService';
@@ -55,13 +56,16 @@ const EXCLUDED_CSV_COLUMNS = new Set([
   'updated_at',
   'createdat',
   'updatedat',
+  /** Não enviar ao cliente na planilha de leads (ficam só na base). */
+  'whatsapp_valido_evolution',
+  'telefone_valido_evolution',
+  'whatsapp_verificado',
+  'telefone_verificado',
 ]);
 
-/** Colunas no DB/import; na planilha do cliente saem como whatsapp_verificado / telefone_verificado. */
-const EVOLUTION_VERIFICATION_TO_CLIENT_CSV: Record<string, string> = {
-  whatsapp_valido_evolution: 'whatsapp_verificado',
-  telefone_valido_evolution: 'telefone_verificado',
-};
+/** Exportação: renomeia coluna vinda da base/payload e troca posição com whatsapp_e164 no cabeçalho. */
+const CSV_COLUMN_AVALIACAO_GOOGLE = 'avaliacao_do_google';
+const CSV_COLUMN_WHATSAPP_E164 = 'whatsapp_e164';
 
 const DEFAULT_CATALOG: Record<string, LeadCatalogItem[]> = {
   SP: [
@@ -222,6 +226,7 @@ export class PublicLeadCheckoutController {
         cidadeIbge,
         creditCard,
         couponCode,
+        buyerKind,
       } = req.body as Record<string, any>;
 
       const validated = this.validatePayload({
@@ -238,6 +243,15 @@ export class PublicLeadCheckoutController {
         this.respondError(res, 400, 'INVALID_CHECKOUT_PAYLOAD', validated.message || 'Payload inválido.');
         return;
       }
+
+      const kindNorm: BuyerKind | undefined =
+        buyerKind === 'PF' || buyerKind === 'PJ' ? buyerKind : undefined;
+      const taxCheck = validateCheckoutTaxId(String(cpfCnpj || ''), kindNorm);
+      if (taxCheck.ok === false) {
+        this.respondError(res, 400, 'INVALID_TAX_ID', taxCheck.message);
+        return;
+      }
+      const cpfCnpjNormalized = taxCheck.digits;
 
       const available = await this.getAvailableLeadsCount(state, segment);
       if (available === null) {
@@ -268,7 +282,7 @@ export class PublicLeadCheckoutController {
         buyerName,
         buyerEmail,
         buyerWhatsapp,
-        cpfCnpj,
+        cpfCnpj: cpfCnpjNormalized,
         cep,
         addressNumber,
         endereco,
@@ -320,7 +334,7 @@ export class PublicLeadCheckoutController {
         paymentPayload.creditCardHolderInfo = {
           name: buyerName,
           email: buyerEmail,
-          cpfCnpj: String(cpfCnpj).replace(/\D/g, ''),
+          cpfCnpj: cpfCnpjNormalized,
           postalCode: String(cep).replace(/\D/g, ''),
           addressNumber: String(addressNumber),
           phone: String(buyerWhatsapp).replace(/\D/g, ''),
@@ -1027,7 +1041,10 @@ export class PublicLeadCheckoutController {
     uf?: string;
     cidadeIbge?: string;
   }): Promise<{ id: string }> {
-    const cleanDoc = (input.cpfCnpj || '').replace(/\D/g, '');
+    const cleanDoc = String(input.cpfCnpj || '').replace(/\D/g, '');
+    if (cleanDoc.length !== 11 && cleanDoc.length !== 14) {
+      throw new Error('CPF/CNPJ inválido para cadastro no Asaas.');
+    }
     const foundByEmail = await this.asaasService.findCustomerByEmail(input.buyerEmail);
     if (foundByEmail) {
       const city = input.cidadeIbge && /^\d+$/.test(String(input.cidadeIbge)) ? Number(input.cidadeIbge) : undefined;
@@ -1043,13 +1060,12 @@ export class PublicLeadCheckoutController {
       return { id: foundByEmail.id };
     }
 
-    const fallbackDoc = cleanDoc.length === 11 || cleanDoc.length === 14 ? cleanDoc : '00000000000';
     const cleanPhone = String(input.buyerWhatsapp).replace(/\D/g, '');
     const city = input.cidadeIbge && /^\d+$/.test(String(input.cidadeIbge)) ? Number(input.cidadeIbge) : undefined;
     const customer = await this.asaasService.createCustomer({
       name: input.buyerName,
       email: input.buyerEmail,
-      cpfCnpj: fallbackDoc,
+      cpfCnpj: cleanDoc,
       mobilePhone: cleanPhone,
       phone: cleanPhone,
       postalCode: input.cep ? String(input.cep).replace(/\D/g, '') : undefined,
@@ -1337,18 +1353,32 @@ export class PublicLeadCheckoutController {
     });
   }
 
+  private applyAvaliacaoGoogleColumnRename(flatRows: Array<Record<string, unknown>>): void {
+    for (const flat of flatRows) {
+      const keyAval = Object.keys(flat).find((k) => k.toLowerCase() === 'avaliacao');
+      if (!keyAval || keyAval === CSV_COLUMN_AVALIACAO_GOOGLE) continue;
+      if (!(CSV_COLUMN_AVALIACAO_GOOGLE in flat)) {
+        flat[CSV_COLUMN_AVALIACAO_GOOGLE] = flat[keyAval];
+      }
+      delete flat[keyAval];
+    }
+  }
+
+  /** Troca a posição de duas colunas no array de cabeçalhos (ex.: colunas N e Q na planilha). */
+  private swapCsvHeaderColumns(headers: string[], colA: string, colB: string): string[] {
+    const iA = headers.indexOf(colA);
+    const iB = headers.indexOf(colB);
+    if (iA === -1 || iB === -1 || iA === iB) return headers;
+    const next = [...headers];
+    [next[iA], next[iB]] = [next[iB], next[iA]];
+    return next;
+  }
+
   private toCsv(rows: Array<Record<string, unknown>>): string {
     if (rows.length === 0) return '';
 
     const flatRows = this.flattenRows(rows);
-    for (const flat of flatRows) {
-      for (const [dbKey, clientKey] of Object.entries(EVOLUTION_VERIFICATION_TO_CLIENT_CSV)) {
-        if (Object.prototype.hasOwnProperty.call(flat, dbKey)) {
-          flat[clientKey] = this.formatEvolutionVerificationForCsv(flat[dbKey]);
-          delete flat[dbKey];
-        }
-      }
-    }
+    this.applyAvaliacaoGoogleColumnRename(flatRows);
 
     // Coleta todos os headers únicos preservando a ordem
     const headerSet = new LinkedHeaderSet();
@@ -1357,7 +1387,12 @@ export class PublicLeadCheckoutController {
         headerSet.add(key);
       }
     }
-    const headers = headerSet.toArray();
+    let headers = headerSet.toArray();
+    headers = this.swapCsvHeaderColumns(
+      headers,
+      CSV_COLUMN_AVALIACAO_GOOGLE,
+      CSV_COLUMN_WHATSAPP_E164
+    );
     const lines = [headers.join(',')];
 
     for (const row of flatRows) {
@@ -1451,15 +1486,6 @@ export class PublicLeadCheckoutController {
     const p = this.resolvePayloadObject(r.payload);
     const wa164 = p?.whatsapp_e164;
     return !!String(wa164 ?? '').trim();
-  }
-
-  private formatEvolutionVerificationForCsv(value: unknown): string {
-    if (value === true) return 'verificado';
-    if (value === false) return 'não verificado';
-    const parsed = this.parseCsvBoolean(value);
-    if (parsed === true) return 'verificado';
-    if (parsed === false) return 'não verificado';
-    return '';
   }
 
   private parseCsvToObjects(content: string, delimiter: string = ','): Array<Record<string, string>> {
