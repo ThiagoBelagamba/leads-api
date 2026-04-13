@@ -10,7 +10,8 @@
     "build": "tsc && tsc-alias",
     "start": "node dist/infrastructure/web/ApiServer.js",
     "dev": "ts-node-dev --poll --ignore-watch node_modules --ignore-watch dist --ignore-watch .git -r tsconfig-paths/register src/main/infrastructure/web/ApiServer.ts",
-    "tunnel": "ngrok http 3000"
+    "tunnel": "ngrok http 3000",
+    "export-demo-csv": "node scripts/export-demonstracao-leads.mjs"
   },
   "keywords": [],
   "author": "",

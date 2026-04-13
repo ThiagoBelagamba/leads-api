@@ -64,7 +64,8 @@ const EXCLUDED_CSV_COLUMNS = new Set([
 ]);
 
 /**
- * Colunas enviadas ao cliente (ordem fixa). Valores vêm das colunas da tabela e do JSON `payload`.
+ * Colunas enviadas ao cliente (ordem fixa, cabeçalho = nome da coluna na planilha).
+ * Valores vêm das colunas da tabela `leadrapido` e do JSON `payload`.
  */
 const CLIENT_CSV_HEADERS = [
   'estado',
@@ -73,25 +74,24 @@ const CLIENT_CSV_HEADERS = [
   'whatsapp',
   'telefone',
   'email',
-  'site',
+  'website',
   'endereco',
   'cidade',
-  'uf',
   'cep',
-  'url',
-  'website',
-  'categoria',
   'telefone_e164',
+  'url',
 ] as const;
 
 /** Por coluna: chaves a procurar no objeto já achatado (comparação case-insensitive). */
 const CLIENT_CSV_COLUMN_SOURCE_KEYS: Record<string, readonly string[]> = {
   nome: ['nome', 'nome_empresa'],
+  email: ['email', 'e-mail', 'e_mail', 'mail'],
+  website: ['website', 'web_site', 'site'],
   endereco: ['endereco', 'endereço'],
+  cidade: ['cidade', 'city'],
   cep: ['cep', 'codigo_postal', 'postal_code'],
   url: ['url', 'maps_url', 'google_maps_url'],
-  website: ['website', 'web_site'],
-  categoria: ['categoria', 'category'],
+  telefone_e164: ['telefone_e164', 'phone_e164', 'tel_e164', 'whatsapp_e164'],
 };
 
 /**
@@ -1403,10 +1403,25 @@ export class PublicLeadCheckoutController {
     return '';
   }
 
+  /** Ordenação das linhas no CSV entregue ao cliente: segmento → estado → nome (pt-BR). */
+  private sortFlatRowsForClientCsv(
+    flatRows: Array<Record<string, unknown>>
+  ): Array<Record<string, unknown>> {
+    const cell = (flat: Record<string, unknown>, col: string) =>
+      String(this.getClientCellValue(flat, col) ?? '').toLocaleLowerCase('pt-BR');
+    return [...flatRows].sort((a, b) => {
+      const c0 = cell(a, 'segmento').localeCompare(cell(b, 'segmento'), 'pt-BR', { sensitivity: 'base' });
+      if (c0 !== 0) return c0;
+      const c1 = cell(a, 'estado').localeCompare(cell(b, 'estado'), 'pt-BR', { sensitivity: 'base' });
+      if (c1 !== 0) return c1;
+      return cell(a, 'nome').localeCompare(cell(b, 'nome'), 'pt-BR', { sensitivity: 'base' });
+    });
+  }
+
   private toCsv(rows: Array<Record<string, unknown>>): string {
     if (rows.length === 0) return '';
 
-    const flatRows = this.flattenRows(rows);
+    const flatRows = this.sortFlatRowsForClientCsv(this.flattenRows(rows));
     const d = LEAD_EXPORT_CSV_DELIMITER;
     const headers = [...CLIENT_CSV_HEADERS];
     const lines = [headers.join(d)];

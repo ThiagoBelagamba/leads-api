@@ -300,6 +300,12 @@ sequenceDiagram
 - O CSV de entrega é gerado em `leads-api/data/lead-exports/`
 - A entrega tenta buscar leads reais via Supabase (tabela `leadrapido`). Se falhar, usa fallback sintético.
 
+### CSV de demonstração (`leads-site`)
+
+Na pasta `leads-api`, com Supabase configurado no `.env`:
+
+- `npm run export-demo-csv` — lê os **segmentos** do ficheiro atual `leads-site/public/demo/demostração-lead-rapido.csv`, busca na tabela `leadrapido` até **50** registos com **email válido OU** URL `http`/`https` (site/website/url), prioriza contactos mais completos, grava colunas na ordem do demo e **ordena** por segmento, estado e nome (pt-BR), e **substitui** esse CSV. Espera-se o monorepo com `leads-api` e `leads-site` ao mesmo nível.
+
 ## Integrações
 
 ### Asaas
