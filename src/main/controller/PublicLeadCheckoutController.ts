@@ -63,9 +63,43 @@ const EXCLUDED_CSV_COLUMNS = new Set([
   'telefone_verificado',
 ]);
 
-/** Exportação: renomeia coluna vinda da base/payload e troca posição com whatsapp_e164 no cabeçalho. */
-const CSV_COLUMN_AVALIACAO_GOOGLE = 'avaliacao_do_google';
-const CSV_COLUMN_WHATSAPP_E164 = 'whatsapp_e164';
+/**
+ * Colunas enviadas ao cliente (ordem fixa). Valores vêm das colunas da tabela e do JSON `payload`.
+ */
+const CLIENT_CSV_HEADERS = [
+  'estado',
+  'segmento',
+  'nome',
+  'whatsapp',
+  'telefone',
+  'email',
+  'site',
+  'endereco',
+  'cidade',
+  'uf',
+  'cep',
+  'url',
+  'website',
+  'categoria',
+  'telefone_e164',
+] as const;
+
+/** Por coluna: chaves a procurar no objeto já achatado (comparação case-insensitive). */
+const CLIENT_CSV_COLUMN_SOURCE_KEYS: Record<string, readonly string[]> = {
+  nome: ['nome', 'nome_empresa'],
+  endereco: ['endereco', 'endereço'],
+  cep: ['cep', 'codigo_postal', 'postal_code'],
+  url: ['url', 'maps_url', 'google_maps_url'],
+  website: ['website', 'web_site'],
+  categoria: ['categoria', 'category'],
+};
+
+/**
+ * Separador de campos na entrega ao cliente.
+ * No Excel em pt-BR o separador de lista do Windows costuma ser `;`; CSV com `,` abre tudo em uma coluna.
+ */
+const LEAD_EXPORT_CSV_DELIMITER = ';';
+const LEAD_EXPORT_CSV_UTF8_BOM = '\uFEFF';
 
 const DEFAULT_CATALOG: Record<string, LeadCatalogItem[]> = {
   SP: [
@@ -90,12 +124,6 @@ function normalizeLeadrapidoSegment(raw: string): string {
       return lower.charAt(0).toLocaleUpperCase('pt-BR') + lower.slice(1);
     })
     .join(' ');
-}
-
-class LinkedHeaderSet {
-  private readonly map = new Map<string, true>();
-  add(key: string): void { this.map.set(key, true); }
-  toArray(): string[] { return Array.from(this.map.keys()); }
 }
 
 export class PublicLeadCheckoutController {
@@ -1353,76 +1381,77 @@ export class PublicLeadCheckoutController {
     });
   }
 
-  private applyAvaliacaoGoogleColumnRename(flatRows: Array<Record<string, unknown>>): void {
-    for (const flat of flatRows) {
-      const keyAval = Object.keys(flat).find((k) => k.toLowerCase() === 'avaliacao');
-      if (!keyAval || keyAval === CSV_COLUMN_AVALIACAO_GOOGLE) continue;
-      if (!(CSV_COLUMN_AVALIACAO_GOOGLE in flat)) {
-        flat[CSV_COLUMN_AVALIACAO_GOOGLE] = flat[keyAval];
-      }
-      delete flat[keyAval];
+  private buildCaseInsensitiveKeyMap(flat: Record<string, unknown>): Map<string, unknown> {
+    const map = new Map<string, unknown>();
+    for (const [k, v] of Object.entries(flat)) {
+      map.set(k.toLowerCase(), v);
     }
+    return map;
   }
 
-  /** Troca a posição de duas colunas no array de cabeçalhos (ex.: colunas N e Q na planilha). */
-  private swapCsvHeaderColumns(headers: string[], colA: string, colB: string): string[] {
-    const iA = headers.indexOf(colA);
-    const iB = headers.indexOf(colB);
-    if (iA === -1 || iB === -1 || iA === iB) return headers;
-    const next = [...headers];
-    [next[iA], next[iB]] = [next[iB], next[iA]];
-    return next;
+  private getClientCellValue(flat: Record<string, unknown>, column: string): unknown {
+    const sources = CLIENT_CSV_COLUMN_SOURCE_KEYS[column] ?? [column];
+    const map = this.buildCaseInsensitiveKeyMap(flat);
+    for (const k of sources) {
+      const lk = k.toLowerCase();
+      if (!map.has(lk)) continue;
+      const val = map.get(lk);
+      if (val === null || val === undefined) continue;
+      if (typeof val === 'string' && val.trim() === '') continue;
+      return val;
+    }
+    return '';
   }
 
   private toCsv(rows: Array<Record<string, unknown>>): string {
     if (rows.length === 0) return '';
 
     const flatRows = this.flattenRows(rows);
-    this.applyAvaliacaoGoogleColumnRename(flatRows);
+    const d = LEAD_EXPORT_CSV_DELIMITER;
+    const headers = [...CLIENT_CSV_HEADERS];
+    const lines = [headers.join(d)];
 
-    // Coleta todos os headers únicos preservando a ordem
-    const headerSet = new LinkedHeaderSet();
-    for (const row of flatRows) {
-      for (const key of Object.keys(row)) {
-        headerSet.add(key);
-      }
-    }
-    let headers = headerSet.toArray();
-    headers = this.swapCsvHeaderColumns(
-      headers,
-      CSV_COLUMN_AVALIACAO_GOOGLE,
-      CSV_COLUMN_WHATSAPP_E164
-    );
-    const lines = [headers.join(',')];
-
-    for (const row of flatRows) {
-      const values = headers.map((header) => this.escapeCsvValue(row[header]));
-      lines.push(values.join(','));
+    for (const flat of flatRows) {
+      const values = headers.map((header) => this.escapeCsvValue(this.getClientCellValue(flat, header), d));
+      lines.push(values.join(d));
     }
 
-    return lines.join('\n');
+    return LEAD_EXPORT_CSV_UTF8_BOM + lines.join('\n');
   }
 
-  private escapeCsvValue(value: unknown): string {
+  private escapeCsvValue(value: unknown, delimiter: string = LEAD_EXPORT_CSV_DELIMITER): string {
     if (value === null || value === undefined) return '';
     if (typeof value === 'object') {
-      return this.escapeCsvValue(JSON.stringify(value));
+      return this.escapeCsvValue(JSON.stringify(value), delimiter);
     }
     const text = String(value);
-    if (/[",\n\r]/.test(text)) {
+    const mustQuote =
+      text.includes('"') ||
+      text.includes('\n') ||
+      text.includes('\r') ||
+      text.includes(delimiter);
+    if (mustQuote) {
       return `"${text.replace(/"/g, '""')}"`;
     }
     return text;
   }
 
   private generateFallbackCsv(record: LeadPurchaseRecord): string {
-    const header = 'nome,whatsapp,estado,segmento';
-    const rows: string[] = [header];
+    const d = LEAD_EXPORT_CSV_DELIMITER;
+    const headers = [...CLIENT_CSV_HEADERS];
+    const rows: string[] = [headers.join(d)];
     for (let i = 1; i <= record.quantity; i += 1) {
       const phone = `11${String(900000000 + (i % 99999999)).slice(-9)}`;
-      rows.push(`"Lead ${i} ${record.segment}","${phone}","${record.state}","${record.segment}"`);
+      const row: Record<string, string> = {};
+      for (const h of headers) row[h] = '';
+      row.estado = record.state;
+      row.segmento = record.segment;
+      row.nome = `Lead ${i} ${record.segment}`;
+      row.whatsapp = phone;
+      row.telefone = phone;
+      rows.push(headers.map((h) => this.escapeCsvValue(row[h], d)).join(d));
     }
-    return rows.join('\n');
+    return LEAD_EXPORT_CSV_UTF8_BOM + rows.join('\n');
   }
 
   private getTodayIsoDate(): string {
