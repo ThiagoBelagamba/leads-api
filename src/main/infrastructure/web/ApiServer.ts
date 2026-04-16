@@ -1,12 +1,12 @@
+import 'reflect-metadata';
+import './env-bootstrap';
 import express from 'express';
 import cors from 'cors';
 import type { Server } from 'http';
 import { randomUUID } from 'crypto';
-import dotenv from 'dotenv';
 import { Logger } from '../logging/Logger';
 import publicLeadRoutes from '../../routes/PublicLeadCheckoutRoutes';
-
-dotenv.config({ override: true });
+import { getCacheRefreshService, getDatabaseService } from '../container/container';
 
 export class ApiServer {
   private app: express.Application;
@@ -135,13 +135,15 @@ export class ApiServer {
     try {
       await this.initialize();
 
+      getCacheRefreshService().start();
+
       this.server = this.app.listen(port, () => {
         this.logger.info('API iniciada com sucesso', { port });
       });
 
       // Graceful shutdown
-      process.on('SIGTERM', () => this.shutdown());
-      process.on('SIGINT', () => this.shutdown());
+      process.on('SIGTERM', () => void this.shutdown());
+      process.on('SIGINT', () => void this.shutdown());
     } catch (error) {
       this.logger.error('Failed to start API server', error as Error);
       process.exit(1);
@@ -152,17 +154,20 @@ export class ApiServer {
     this.logger.startupInfo('🔄 shutting down gracefully...');
 
     try {
+      getCacheRefreshService().stop();
+      await getDatabaseService().dispose();
+
       // Close HTTP server
       if (this.server) {
         this.server.close(() => {
-          this.logger.info('✅ API server closed successfully');
+          void this.logger.info('✅ API server closed successfully');
           process.exit(0);
         });
       } else {
         process.exit(0);
       }
     } catch (error) {
-      this.logger.error('❌ Error during shutdown', error as Error);
+      await this.logger.error('❌ Error during shutdown', error as Error);
       process.exit(1);
     }
   }

@@ -43,7 +43,12 @@
     }
   },
   "include": [
+    "src/main/infrastructure/web/env-bootstrap.ts",
     "src/main/infrastructure/web/ApiServer.ts",
+    "src/main/infrastructure/database/DatabaseService.ts",
+    "src/main/infrastructure/container/types.ts",
+    "src/main/infrastructure/container/container.ts",
+    "src/main/infrastructure/services/CacheRefreshService.ts",
     "src/main/routes/PublicLeadCheckoutRoutes.ts",
     "src/main/controller/PublicLeadCheckoutController.ts",
     "src/main/infrastructure/services/AsaasService.ts",

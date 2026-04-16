@@ -3,10 +3,12 @@ import path from 'path';
 import { validateCheckoutTaxId, type BuyerKind } from '../utils/taxId';
 import axios from 'axios';
 import { Request, Response } from 'express';
+import { inject, injectable } from 'inversify';
 import { AsaasService } from '../infrastructure/services/AsaasService';
 import { EmailService } from '../infrastructure/services/EmailService';
 import { Logger } from '../infrastructure/logging/Logger';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { DatabaseService } from '../infrastructure/database/DatabaseService';
+import { TYPES } from '../infrastructure/container/types';
 
 type PaymentMethod = 'PIX' | 'CREDIT_CARD';
 
@@ -126,27 +128,33 @@ function normalizeLeadrapidoSegment(raw: string): string {
     .join(' ');
 }
 
+@injectable()
 export class PublicLeadCheckoutController {
   private readonly asaasService: AsaasService;
   private readonly emailService: EmailService;
   private readonly logger: Logger;
+  private readonly databaseService: DatabaseService;
   private readonly dataDir: string;
   private readonly purchasesFile: string;
   private readonly exportDir: string;
   private readonly catalogFile: string;
   private readonly couponsFile: string;
-  private readonly supabase: SupabaseClient | null;
 
-  constructor() {
-    this.logger = new Logger();
-    this.asaasService = new AsaasService(this.logger);
-    this.emailService = new EmailService(this.logger);
+  constructor(
+    @inject(TYPES.Logger) logger: Logger,
+    @inject(TYPES.DatabaseService) databaseService: DatabaseService,
+    @inject(TYPES.AsaasService) asaasService: AsaasService,
+    @inject(TYPES.EmailService) emailService: EmailService
+  ) {
+    this.logger = logger;
+    this.databaseService = databaseService;
+    this.asaasService = asaasService;
+    this.emailService = emailService;
     this.dataDir = path.resolve(process.cwd(), 'data');
     this.purchasesFile = path.join(this.dataDir, 'lead-purchases.json');
     this.exportDir = path.join(this.dataDir, 'lead-exports');
     this.catalogFile = path.join(this.dataDir, 'lead-catalog.json');
     this.couponsFile = path.join(this.dataDir, 'lead-coupons.json');
-    this.supabase = this.createSupabaseClient();
   }
 
   private getRequestId(res: Response): string {
@@ -174,24 +182,49 @@ export class PublicLeadCheckoutController {
   }
 
   async getCatalog(_req: Request, res: Response): Promise<void> {
-    let catalog = await this.buildCatalogFromSupabase();
-    if (!catalog) {
-      catalog = await this.readCatalog();
+    const requestId = this.getRequestId(res);
+    const dataUnavailable = (): void => {
+      res.status(503).json({
+        success: false,
+        code: 'DATA_SERVICE_UNAVAILABLE',
+        message: 'Serviço de dados indisponível no momento.',
+        supportCode: requestId,
+        requestId,
+        timestamp: new Date().toISOString(),
+      });
+    };
+
+    try {
+      let catalog = await this.buildCatalogFromDatabase();
+      if (!catalog) {
+        catalog = await this.readCatalog();
+      }
+      this.cachedCatalog = catalog;
+
+      const states = Object.keys(catalog)
+        .sort()
+        .map((state) => {
+          const raw = catalog[state];
+          const segments = Array.isArray(raw) ? raw : [];
+          return { state, segments };
+        });
+
+      res.status(200).json({
+        success: true,
+        unitPrice: UNIT_PRICE,
+        minimumAmount: MIN_AMOUNT,
+        states,
+      });
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      await this.logger.error('Falha inesperada ao montar catálogo', err, {
+        component: 'PublicLeadCheckoutController',
+        operation: 'getCatalog',
+        requestId,
+      });
+      dataUnavailable();
+      return;
     }
-
-    const states = Object.keys(catalog)
-      .sort()
-      .map((state) => ({
-        state,
-        segments: catalog[state],
-      }));
-
-    res.status(200).json({
-      success: true,
-      unitPrice: UNIT_PRICE,
-      minimumAmount: MIN_AMOUNT,
-      states,
-    });
   }
 
   async getQuote(req: Request, res: Response): Promise<void> {
@@ -599,10 +632,6 @@ export class PublicLeadCheckoutController {
         this.respondError(res, 401, 'UNAUTHORIZED_ADMIN', 'Não autorizado.');
         return;
       }
-      if (!this.supabase) {
-        this.respondError(res, 500, 'SUPABASE_NOT_CONFIGURED', 'Supabase não configurado na API.');
-        return;
-      }
 
       type StagingRow = {
         place_id: string | null;
@@ -621,8 +650,6 @@ export class PublicLeadCheckoutController {
         payload: unknown;
       };
 
-      const PROMOTE_COLUMNS =
-        'place_id,estado,segmento,nome,whatsapp,telefone,email,site,endereco,cidade,uf,whatsapp_valido_evolution,telefone_valido_evolution,payload';
       const pageSize = 500;
       let offset = 0;
       let promoted = 0;
@@ -630,17 +657,37 @@ export class PublicLeadCheckoutController {
       let skippedNoContact = 0;
 
       while (true) {
-        const { data: stagingRows, error: fetchError } = await this.supabase
-          .from('leadrapido_staging')
-          .select(PROMOTE_COLUMNS)
-          .range(offset, offset + pageSize - 1) as { data: StagingRow[] | null; error: { message: string } | null };
-
-        if (fetchError) {
-          this.respondError(res, 500, 'PROMOTE_FETCH_FAILED', `Erro ao ler staging: ${fetchError.message}`);
+        let stagingRows: StagingRow[] = [];
+        try {
+          const result = await this.databaseService.query<StagingRow>(
+            `SELECT
+               place_id,
+               estado,
+               segmento,
+               nome,
+               whatsapp,
+               telefone,
+               email,
+               site,
+               endereco,
+               cidade,
+               uf,
+               whatsapp_valido_evolution,
+               telefone_valido_evolution,
+               payload
+             FROM public.leadrapido_staging
+             ORDER BY id
+             LIMIT $1 OFFSET $2`,
+            [pageSize, offset]
+          );
+          stagingRows = result.rows || [];
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          this.respondError(res, 500, 'PROMOTE_FETCH_FAILED', `Erro ao ler staging: ${message}`);
           return;
         }
 
-        if (!stagingRows || stagingRows.length === 0) break;
+        if (stagingRows.length === 0) break;
 
         const validRows = stagingRows.filter((r) => r.place_id && String(r.place_id).trim());
         skipped += stagingRows.length - validRows.length;
@@ -678,23 +725,86 @@ export class PublicLeadCheckoutController {
         skippedNoContact += dedupedWithNome.length - withContact.length;
 
         if (withContact.length > 0) {
-          const rowsForLeadrapido = withContact.map((r) => ({
+          const rowsForLeadrapido = withContact.map((r: StagingRow) => ({
             ...r,
             segmento:
               r.segmento != null && String(r.segmento).trim()
                 ? normalizeLeadrapidoSegment(String(r.segmento))
                 : r.segmento,
           }));
-          const { error: upsertError } = await this.supabase
-            .from('leadrapido')
-            .upsert(rowsForLeadrapido, { onConflict: 'place_id' });
-
-          if (upsertError) {
+          try {
+            await this.databaseService.query(
+              `INSERT INTO public.leadrapido (
+                 place_id,
+                 estado,
+                 segmento,
+                 nome,
+                 whatsapp,
+                 telefone,
+                 email,
+                 site,
+                 endereco,
+                 cidade,
+                 uf,
+                 whatsapp_valido_evolution,
+                 telefone_valido_evolution,
+                 payload
+               )
+               SELECT
+                 x.place_id,
+                 x.estado,
+                 x.segmento,
+                 x.nome,
+                 x.whatsapp,
+                 x.telefone,
+                 x.email,
+                 x.site,
+                 x.endereco,
+                 x.cidade,
+                 x.uf,
+                 x.whatsapp_valido_evolution,
+                 x.telefone_valido_evolution,
+                 x.payload
+               FROM jsonb_to_recordset($1::jsonb) AS x(
+                 place_id text,
+                 estado text,
+                 segmento text,
+                 nome text,
+                 whatsapp text,
+                 telefone text,
+                 email text,
+                 site text,
+                 endereco text,
+                 cidade text,
+                 uf text,
+                 whatsapp_valido_evolution boolean,
+                 telefone_valido_evolution boolean,
+                 payload jsonb
+               )
+               ON CONFLICT (place_id) DO UPDATE SET
+                 estado = EXCLUDED.estado,
+                 segmento = EXCLUDED.segmento,
+                 nome = EXCLUDED.nome,
+                 whatsapp = EXCLUDED.whatsapp,
+                 telefone = EXCLUDED.telefone,
+                 email = EXCLUDED.email,
+                 site = EXCLUDED.site,
+                 endereco = EXCLUDED.endereco,
+                 cidade = EXCLUDED.cidade,
+                 uf = EXCLUDED.uf,
+                 whatsapp_valido_evolution = EXCLUDED.whatsapp_valido_evolution,
+                 telefone_valido_evolution = EXCLUDED.telefone_valido_evolution,
+                 payload = EXCLUDED.payload,
+                 updated_at = now()`,
+              [JSON.stringify(rowsForLeadrapido)]
+            );
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
             this.logger.error('Erro ao fazer upsert na leadrapido', undefined, {
               offset,
-              error: upsertError.message,
+              error: message,
             });
-            this.respondError(res, 500, 'PROMOTE_UPSERT_FAILED', `Erro ao promover leads: ${upsertError.message}`);
+            this.respondError(res, 500, 'PROMOTE_UPSERT_FAILED', `Erro ao promover leads: ${message}`);
             return;
           }
 
@@ -705,9 +815,20 @@ export class PublicLeadCheckoutController {
         offset += pageSize;
       }
 
-      const { error: truncateError } = await this.supabase.rpc('truncate_leadrapido_staging');
-      if (truncateError) {
-        this.logger.warn('Promote concluído mas falhou ao limpar staging', { error: truncateError.message });
+      try {
+        await this.databaseService.query('TRUNCATE TABLE public.leadrapido_staging');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn('Promote concluído mas falhou ao limpar staging', { error: message });
+      }
+
+      try {
+        await this.logger.info('🔄 Atualizando cache de leads (resumo_leads_mv) após promote...');
+        await this.databaseService.query('REFRESH MATERIALIZED VIEW CONCURRENTLY public.resumo_leads_mv;');
+        await this.logger.info('✅ Cache de leads atualizado após promote');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn('Promote concluído mas falhou ao atualizar resumo_leads_mv', { error: message });
       }
 
       this.logger.info('Staging promovido para leadrapido com sucesso', {
@@ -733,10 +854,6 @@ export class PublicLeadCheckoutController {
     try {
       if (!this.isAdminAuthorized(req)) {
         this.respondError(res, 401, 'UNAUTHORIZED_ADMIN', 'Não autorizado.');
-        return;
-      }
-      if (!this.supabase) {
-        this.respondError(res, 500, 'SUPABASE_NOT_CONFIGURED', 'Supabase não configurado na API.');
         return;
       }
 
@@ -822,14 +939,65 @@ export class PublicLeadCheckoutController {
       let inserted = 0;
       for (let i = 0; i < filteredRows.length; i += chunkSize) {
         const chunk = filteredRows.slice(i, i + chunkSize);
-        const { error } = await this.supabase.from('leadrapido_staging').insert(chunk);
-        if (error) {
+        try {
+          await this.databaseService.query(
+            `INSERT INTO public.leadrapido_staging (
+               place_id,
+               estado,
+               segmento,
+               nome,
+               whatsapp,
+               telefone,
+               email,
+               site,
+               endereco,
+               cidade,
+               uf,
+               payload,
+               whatsapp_valido_evolution,
+               telefone_valido_evolution
+             )
+             SELECT
+               x.place_id,
+               x.estado,
+               x.segmento,
+               x.nome,
+               x.whatsapp,
+               x.telefone,
+               x.email,
+               x.site,
+               x.endereco,
+               x.cidade,
+               x.uf,
+               x.payload,
+               x.whatsapp_valido_evolution,
+               x.telefone_valido_evolution
+             FROM jsonb_to_recordset($1::jsonb) AS x(
+               place_id text,
+               estado text,
+               segmento text,
+               nome text,
+               whatsapp text,
+               telefone text,
+               email text,
+               site text,
+               endereco text,
+               cidade text,
+               uf text,
+               payload jsonb,
+               whatsapp_valido_evolution boolean,
+               telefone_valido_evolution boolean
+             )`,
+            [JSON.stringify(chunk)]
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
           this.logger.error('Erro ao inserir CSV na tabela leadrapido_staging', undefined, {
             chunkStart: i,
             chunkSize: chunk.length,
-            error: error.message,
+            error: message,
           });
-          this.respondError(res, 500, 'CSV_INSERT_FAILED', `Erro ao inserir CSV: ${error.message}`);
+          this.respondError(res, 500, 'CSV_INSERT_FAILED', `Erro ao inserir CSV: ${message}`);
           return;
         }
         inserted += chunk.length;
@@ -908,49 +1076,30 @@ export class PublicLeadCheckoutController {
       .filter(Boolean);
   }
 
-  private createSupabaseClient(): SupabaseClient | null {
-    const url = process.env.SUPABASE_URL?.trim();
-    const key = (process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)?.trim();
-    if (!url || !key) return null;
-    return createClient(url, key, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
-  }
-
   private async getAvailableLeadsCount(state: string, segment: string): Promise<number> {
     const requestedStates = this.parseStates(state);
     const requestedSegments = this.parseSegments(segment);
     if (requestedStates.length === 0 || requestedSegments.length === 0) return 0;
 
-    // Preferência: contar na tabela do Supabase (real-time)
-    if (this.supabase) {
+    try {
       let total = 0;
-      let hadError = false;
-
       for (const stateItem of requestedStates) {
         for (const segmentItem of requestedSegments) {
-          const { count, error } = await this.supabase
-            .from('leadrapido')
-            .select('place_id', { count: 'exact', head: true })
-            .eq('estado', stateItem)
-            .ilike('segmento', segmentItem);
-
-          if (error) {
-            hadError = true;
-            this.logger.warn('Falha ao contar leads no Supabase, usando fallback', {
-              state: stateItem,
-              segment: segmentItem,
-              error: error.message,
-            });
-            break;
-          }
-
-          total += typeof count === 'number' ? count : 0;
+          const { rows } = await this.databaseService.query<{ total: number | string }>(
+            `SELECT COUNT(*)::bigint AS total
+             FROM public.leadrapido
+             WHERE estado = $1
+               AND segmento ILIKE $2`,
+            [stateItem, segmentItem]
+          );
+          const n = Number(rows?.[0]?.total ?? 0);
+          if (Number.isFinite(n)) total += n;
         }
-        if (hadError) break;
       }
-
-      if (!hadError) return total;
+      return total;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn('Falha ao contar leads no Postgres, usando fallback catálogo', { error: message });
     }
 
     // Fallback: catálogo local
@@ -972,36 +1121,43 @@ export class PublicLeadCheckoutController {
     return this.cachedCatalog || DEFAULT_CATALOG;
   }
 
-  private async buildCatalogFromSupabase(): Promise<Record<string, LeadCatalogItem[]> | null> {
-    if (!this.supabase) return null;
+  private async buildCatalogFromDatabase(): Promise<Record<string, LeadCatalogItem[]> | null> {
+    type SummaryRow = { estado: string; segmento: string; available: number | string };
 
-    const { data, error } = await this.supabase.rpc('leadrapido_catalog_summary');
+    try {
+      const { rows, rowCount } = await this.databaseService.query<SummaryRow>(
+        'SELECT * FROM public.leadrapido_catalog_summary();'
+      );
 
-    if (error) {
-      this.logger.warn('Falha ao carregar catálogo do Supabase, usando fallback arquivo', {
-        error: error.message,
+      if (!rows || rowCount === 0) {
+        return null;
+      }
+
+      const catalog: Record<string, LeadCatalogItem[]> = {};
+
+      for (const raw of rows) {
+        const estado = String(raw.estado ?? '').trim();
+        const segmento = String(raw.segmento ?? '').trim();
+        if (!estado || !segmento) continue;
+        const n = Number(raw.available);
+        const availableLeads = Number.isFinite(n) ? n : 0;
+        if (!catalog[estado]) catalog[estado] = [];
+        catalog[estado].push({ segment: segmento, availableLeads });
+      }
+
+      if (Object.keys(catalog).length === 0) {
+        return null;
+      }
+
+      this.cachedCatalog = catalog;
+      return catalog;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn('Falha ao carregar catálogo do Postgres, usando fallback arquivo', {
+        error: message,
       });
       return null;
     }
-
-    if (!Array.isArray(data) || data.length === 0) {
-      return null;
-    }
-
-    type SummaryRow = { estado: string; segmento: string; available: number | string };
-    const catalog: Record<string, LeadCatalogItem[]> = {};
-
-    for (const raw of data as SummaryRow[]) {
-      const estado = String(raw.estado ?? '').trim();
-      const segmento = String(raw.segmento ?? '').trim();
-      if (!estado || !segmento) continue;
-      const n = Number(raw.available);
-      const availableLeads = Number.isFinite(n) ? n : 0;
-      if (!catalog[estado]) catalog[estado] = [];
-      catalog[estado].push({ segment: segmento, availableLeads });
-    }
-
-    return Object.keys(catalog).length > 0 ? catalog : null;
   }
 
   private async readCatalog(): Promise<Record<string, LeadCatalogItem[]>> {
@@ -1322,8 +1478,6 @@ export class PublicLeadCheckoutController {
   }
 
   private async fetchRealLeadsRows(record: LeadPurchaseRecord): Promise<Array<Record<string, unknown>>> {
-    if (!this.supabase) return [];
-
     const requestedStates = this.parseStates(record.state);
     const requestedSegments = this.parseSegments(record.segment);
     if (requestedStates.length === 0 || requestedSegments.length === 0) return [];
@@ -1335,25 +1489,27 @@ export class PublicLeadCheckoutController {
         const remaining = record.quantity - rows.length;
         if (remaining <= 0) break;
 
-        const { data, error } = await this.supabase
-          .from('leadrapido')
-          .select('*')
-          .eq('estado', stateItem)
-          .ilike('segmento', segmentItem)
-          .limit(remaining);
-
-        if (error) {
+        try {
+          const result = await this.databaseService.query<Record<string, unknown>>(
+            `SELECT *
+             FROM public.leadrapido
+             WHERE estado = $1
+               AND segmento ILIKE $2
+             LIMIT $3`,
+            [stateItem, segmentItem, remaining]
+          );
+          if (Array.isArray(result.rows) && result.rows.length > 0) {
+            rows.push(...result.rows);
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
           this.logger.warn('Falha ao buscar leads reais para entrega, usando fallback', {
             paymentId: record.asaasPaymentId,
             state: stateItem,
             segment: segmentItem,
-            error: error.message,
+            error: message,
           });
           return [];
-        }
-
-        if (Array.isArray(data) && data.length > 0) {
-          rows.push(...(data as Array<Record<string, unknown>>));
         }
       }
       if (rows.length >= record.quantity) break;

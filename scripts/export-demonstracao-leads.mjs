@@ -7,14 +7,15 @@
  * Uso (na pasta leads-api, com .env configurado):
  *   npm run export-demo-csv
  *
- * Requer: SUPABASE_URL e SUPABASE_SERVICE_KEY ou SUPABASE_SERVICE_ROLE_KEY
+ * Requer: DATABASE_URL (ou PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE)
  */
 
 import 'dotenv/config';
-import { createClient } from '@supabase/supabase-js';
+import pg from 'pg';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+const { Pool } = pg;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -195,29 +196,29 @@ function allocateQuotas(nSeg, total) {
  * Busca por segmento: ILIKE contém texto (underscore escapado), depois filtra
  * com a mesma normalização pt-BR da API.
  */
-async function fetchPool(supabase, segmentLabel) {
+async function fetchPool(pool, segmentLabel) {
   const wantNorm = normalizeSegment(segmentLabel);
   const pattern = `%${escapeForIlikeContains(segmentLabel)}%`;
   const byId = new Map();
 
   for (let from = 0; from < MAX_ROWS_SCAN_PER_SEGMENT; from += PAGE_SIZE) {
-    const to = from + PAGE_SIZE - 1;
-    const { data, error } = await supabase
-      .from('leadrapido')
-      .select('*')
-      .ilike('segmento', pattern)
-      .range(from, to);
+    const { rows } = await pool.query(
+      `SELECT *
+       FROM public.leadrapido
+       WHERE segmento ILIKE $1 ESCAPE '\\'
+       ORDER BY id
+       LIMIT $2 OFFSET $3`,
+      [pattern, PAGE_SIZE, from]
+    );
+    if (!rows?.length) break;
 
-    if (error) throw new Error(`Supabase (${segmentLabel}): ${error.message}`);
-    if (!data?.length) break;
-
-    for (const row of data) {
+    for (const row of rows) {
       if (normalizeSegment(row.segmento) !== wantNorm) continue;
       const id = row.id ?? row.place_id;
       if (id !== undefined && id !== null) byId.set(String(id), row);
     }
 
-    if (data.length < PAGE_SIZE) break;
+    if (rows.length < PAGE_SIZE) break;
   }
 
   const rows = [...byId.values()];
@@ -302,33 +303,36 @@ async function writeCsvAtomically(destPath, content) {
 }
 
 async function main() {
-  const url = process.env.SUPABASE_URL?.trim();
-  const key = (process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)?.trim();
-  if (!url || !key) {
-    console.error('Configure SUPABASE_URL e SUPABASE_SERVICE_KEY (ou SUPABASE_SERVICE_ROLE_KEY) no .env da leads-api.');
-    process.exit(1);
-  }
+  const dbUrl = process.env.DATABASE_URL?.trim();
+  const pool = dbUrl
+    ? new Pool({ connectionString: dbUrl })
+    : new Pool({
+        host: process.env.PGHOST?.trim() || '127.0.0.1',
+        port: parseInt(process.env.PGPORT || '5432', 10),
+        user: process.env.PGUSER?.trim() || 'postgres',
+        password: process.env.PGPASSWORD ?? '',
+        database: process.env.PGDATABASE?.trim() || 'postgres',
+      });
 
   const segments = parseSegmentsFromDemo(DEMO_CSV);
   console.log('Segmentos no demo:', segments.join(' | '));
 
-  const supabase = createClient(url, key);
-
-  const { data: sampleSegs, error: sampleErr } = await supabase
-    .from('leadrapido')
-    .select('segmento')
-    .not('segmento', 'is', null)
-    .limit(500);
-  if (!sampleErr && sampleSegs?.length) {
-    const uniq = [...new Set(sampleSegs.map((r) => String(r.segmento).trim()))].slice(0, 25);
+  const sampleSegs = await pool.query(
+    `SELECT segmento
+     FROM public.leadrapido
+     WHERE segmento IS NOT NULL
+     LIMIT 500`
+  );
+  if (sampleSegs.rows?.length) {
+    const uniq = [...new Set(sampleSegs.rows.map((r) => String(r.segmento).trim()))].slice(0, 25);
     console.log('Amostra de segmento na base:', uniq.join(' | '));
   }
 
   const pools = [];
   for (const seg of segments) {
-    const pool = await fetchPool(supabase, seg);
-    console.log(`  "${seg}": ${pool.length} leads (email OU URL http(s))`);
-    pools.push({ seg, rows: pool });
+    const leads = await fetchPool(pool, seg);
+    console.log(`  "${seg}": ${leads.length} leads (email OU URL http(s))`);
+    pools.push({ seg, rows: leads });
   }
 
   const quotas = allocateQuotas(segments.length, TARGET_TOTAL);
@@ -382,6 +386,7 @@ async function main() {
   const body = bom + lines.join('\n') + '\n';
   const outPath = await writeCsvAtomically(DEMO_CSV, body);
   console.log(`Escrito ${ordered.length} linhas (ordenadas) em:\n  ${outPath}`);
+  await pool.end();
 }
 
 main().catch((e) => {

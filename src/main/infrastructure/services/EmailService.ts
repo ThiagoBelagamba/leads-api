@@ -7,8 +7,10 @@
 import fs from 'fs';
 import path from 'path';
 import nodemailer from 'nodemailer';
+import { inject, injectable } from 'inversify';
 import { Logger } from '../logging/Logger';
 import { getSmtpConfig } from '../config/SmtpConfig';
+import { TYPES } from '../container/types';
 
 /** Nomes dos PDFs de boas-vindas (devem estar no volume montado em WELCOME_PDFS_PATH). */
 const WELCOME_PDF_FILENAMES = [
@@ -61,10 +63,11 @@ export interface LeadPurchaseDeliveryEmailData {
   attachments: Array<{ filename: string; content: Buffer }>;
 }
 
+@injectable()
 export class EmailService {
   private transporter: nodemailer.Transporter | null = null;
 
-  constructor(private logger: Logger) {
+  constructor(@inject(TYPES.Logger) private readonly logger: Logger) {
     this.initializeTransporter();
   }
 

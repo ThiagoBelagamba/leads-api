@@ -1,8 +1,8 @@
 import { Router } from 'express';
-import { PublicLeadCheckoutController } from '../controller/PublicLeadCheckoutController';
+import { getPublicLeadCheckoutController } from '../infrastructure/container/container';
 
 const router = Router();
-const controller = new PublicLeadCheckoutController();
+const controller = getPublicLeadCheckoutController();
 
 router.get('/catalog', controller.getCatalog.bind(controller));
 router.get('/quote', controller.getQuote.bind(controller));

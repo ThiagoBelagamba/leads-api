@@ -5,7 +5,9 @@
 
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import dotenv from 'dotenv';
+import { inject, injectable } from 'inversify';
 import { Logger } from '../logging/Logger';
+import { TYPES } from '../container/types';
 
 export interface AsaasCreateSubscriptionPayload {
   customer: string;
@@ -174,14 +176,15 @@ export interface AsaasCheckoutResponse {
   deleted: boolean;
 }
 
+@injectable()
 export class AsaasService {
   private client: AxiosInstance;
   private config: AsaasConfig;
   private logger: Logger;
 
-  constructor(logger?: Logger) {
+  constructor(@inject(TYPES.Logger) logger: Logger) {
     dotenv.config({ override: true });
-    this.logger = logger || new Logger();
+    this.logger = logger;
     const environment = (process.env.ASAAS_ENVIRONMENT as 'production' | 'sandbox') || 'sandbox';
     const envBaseUrl = process.env.ASAAS_API_URL || process.env.ASAAS_BASE_URL;
     const rawApiKey = process.env.ASAAS_API_KEY || process.env.ASAAS_ACCESS_TOKEN || '';
