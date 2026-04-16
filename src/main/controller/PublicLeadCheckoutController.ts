@@ -703,22 +703,38 @@ export class PublicLeadCheckoutController {
         // Se a coluna "nome" estiver vazia, tenta preencher a partir do payload (ex: nome_empresa).
         const dedupedWithNome = deduped.map((r) => {
           const currentNome = r.nome ? String(r.nome).trim() : '';
-          if (currentNome) return r;
-
-          let payloadObj: any = null;
-          if (r.payload && typeof r.payload === 'string') {
-            try {
-              payloadObj = JSON.parse(r.payload);
-            } catch {
-              payloadObj = null;
-            }
-          } else if (r.payload && typeof r.payload === 'object') {
-            payloadObj = r.payload as any;
-          }
-
+          const payloadObj = this.resolvePayloadObject(r.payload);
           const nomeFromPayload = payloadObj?.nome_empresa ?? payloadObj?.nome ?? payloadObj?.nomeEmpresa;
-          const nome = nomeFromPayload ? String(nomeFromPayload) : r.nome;
-          return { ...r, nome };
+          const nome = currentNome ? r.nome : nomeFromPayload ? String(nomeFromPayload) : r.nome;
+
+          // Preenche campos comuns a partir do payload quando estiverem vazios.
+          const pick = (cur: unknown, ...keys: string[]): string | null => {
+            const curStr = String(cur ?? '').trim();
+            if (curStr) return curStr;
+            for (const k of keys) {
+              const v = this.getPayloadString(payloadObj, k);
+              if (v) return v;
+            }
+            return null;
+          };
+
+          const whatsapp = pick(r.whatsapp, 'whatsapp', 'whatsapp_e164', 'telefone_e164');
+          const telefone = pick(r.telefone, 'telefone', 'phone', 'tel', 'telefone_e164', 'phone_e164', 'tel_e164');
+          const email = pick(r.email, 'email', 'mail', 'e_mail');
+          const site = pick(r.site, 'website', 'web_site', 'site');
+          const endereco = pick(r.endereco, 'endereco', 'endereço', 'address');
+          const cidade = pick(r.cidade, 'cidade', 'city');
+
+          return {
+            ...r,
+            nome,
+            whatsapp: this.isValidPhoneLike(whatsapp) ? whatsapp : null,
+            telefone: this.isValidPhoneLike(telefone) ? telefone : null,
+            email: email || r.email,
+            site: site || r.site,
+            endereco: endereco || r.endereco,
+            cidade: cidade || r.cidade,
+          };
         });
 
         const withContact = dedupedWithNome.filter((r) => this.stagingRowHasContact(r));
@@ -910,6 +926,9 @@ export class PublicLeadCheckoutController {
               filtered[normalizedKey] = this.parseCsvBoolean(value);
             } else if (normalizedKey === 'segmento') {
               filtered[normalizedKey] = normalizeLeadrapidoSegment(String(value ?? ''));
+            } else if (normalizedKey === 'whatsapp' || normalizedKey === 'telefone') {
+              // Evita lixo tipo "Enviar para o smartphone" virar contato válido.
+              filtered[normalizedKey] = this.isValidPhoneLike(value) ? value : null;
             } else {
               filtered[normalizedKey] = value;
             }
@@ -918,8 +937,10 @@ export class PublicLeadCheckoutController {
           }
         }
 
-        if (Object.keys(extra).length > 0 && !filtered['payload']) {
-          filtered['payload'] = extra;
+        // Se existirem colunas extras, mescla no payload existente (sem sobrescrever chaves já presentes).
+        if (Object.keys(extra).length > 0) {
+          const existing = this.resolvePayloadObject(filtered['payload']);
+          filtered['payload'] = { ...(extra || {}), ...(existing || {}) };
         }
 
         filteredRows.push(filtered);
@@ -1650,6 +1671,44 @@ export class PublicLeadCheckoutController {
     return null;
   }
 
+  private digitsOnly(value: unknown): string {
+    if (value === null || value === undefined) return '';
+    return String(value).replace(/\D/g, '');
+  }
+
+  /**
+   * Aceita telefones BR e BR+DDI:
+   * - 10 ou 11 dígitos (fixo/celular com DDD)
+   * - 12 ou 13 dígitos (ex.: 55 + DDD + número)
+   */
+  private isValidPhoneLike(value: unknown): boolean {
+    const digits = this.digitsOnly(value);
+    return digits.length >= 10 && digits.length <= 13;
+  }
+
+  private getPayloadString(payload: Record<string, unknown> | null, key: string): string {
+    if (!payload) return '';
+    const lk = key.toLowerCase();
+    for (const [k, v] of Object.entries(payload)) {
+      if (k.toLowerCase() !== lk) continue;
+      return String(v ?? '').trim();
+    }
+    return '';
+  }
+
+  private hasValidContactFromPayload(payload: Record<string, unknown> | null): boolean {
+    if (!payload) return false;
+    const candidates = [
+      this.getPayloadString(payload, 'whatsapp'),
+      this.getPayloadString(payload, 'telefone'),
+      this.getPayloadString(payload, 'telefone_e164'),
+      this.getPayloadString(payload, 'whatsapp_e164'),
+      this.getPayloadString(payload, 'phone_e164'),
+      this.getPayloadString(payload, 'tel_e164'),
+    ];
+    return candidates.some((c) => this.isValidPhoneLike(c));
+  }
+
   private csvRowHasContact(row: Record<string, string>): boolean {
     const get = (name: string): string => {
       for (const [k, v] of Object.entries(row)) {
@@ -1657,7 +1716,14 @@ export class PublicLeadCheckoutController {
       }
       return '';
     };
-    return !!(get('telefone') || get('whatsapp') || get('whatsapp_e164'));
+    return (
+      this.isValidPhoneLike(get('telefone')) ||
+      this.isValidPhoneLike(get('whatsapp')) ||
+      this.isValidPhoneLike(get('telefone_e164')) ||
+      this.isValidPhoneLike(get('whatsapp_e164')) ||
+      this.isValidPhoneLike(get('phone_e164')) ||
+      this.isValidPhoneLike(get('tel_e164'))
+    );
   }
 
   private resolvePayloadObject(payload: unknown): Record<string, unknown> | null {
@@ -1681,11 +1747,12 @@ export class PublicLeadCheckoutController {
     whatsapp?: string | null;
     payload?: unknown;
   }): boolean {
-    if (String(r.telefone ?? '').trim()) return true;
-    if (String(r.whatsapp ?? '').trim()) return true;
     const p = this.resolvePayloadObject(r.payload);
-    const wa164 = p?.whatsapp_e164;
-    return !!String(wa164 ?? '').trim();
+    return (
+      this.isValidPhoneLike(r.telefone) ||
+      this.isValidPhoneLike(r.whatsapp) ||
+      this.hasValidContactFromPayload(p)
+    );
   }
 
   private parseCsvToObjects(content: string, delimiter: string = ','): Array<Record<string, string>> {
